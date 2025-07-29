@@ -1022,10 +1022,10 @@ class Optimizer:
         """Suggest parameters using Optuna trial"""
         tp_level1 = trial.suggest_categorical('tp_level1', [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])
 
-        # Trailing deviation limited to TP1 value
-        max_trailing = tp_level1  # Can't exceed TP1
-        trailing_options = [x for x in [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] if x <= max_trailing]
-        trailing_deviation = trial.suggest_categorical('trailing_deviation', trailing_options)
+        # Fixed trailing deviation options - let the constraint be handled in the strategy
+        trailing_deviation = trial.suggest_categorical('trailing_deviation',
+                                                       [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])
+
         return StrategyParams(
             # CONSTANT PARAMETERS
             base_percent=1.0,
@@ -1037,12 +1037,10 @@ class Optimizer:
             rsi_exit_threshold=70.0,
             fees=0.075,
 
-            # OPTIMIZABLE PARAMETERS - WIDER RANGES
+            # OPTIMIZABLE PARAMETERS
             initial_deviation=trial.suggest_categorical('initial_deviation', [3.0]),
+            trailing_deviation=trailing_deviation,  # Will be constrained in strategy
             tp_level1=tp_level1,
-            trailing_deviation=trailing_deviation,
-            # 1-5 range
-            # tp_level2 and tp_level3 are calculated automatically as tp1*2 and tp1*3
             tp_percent1=trial.suggest_categorical('tp_percent1', [50.0]),
             tp_percent2=trial.suggest_categorical('tp_percent2', [30.0]),
             tp_percent3=trial.suggest_categorical('tp_percent3', [20.0])
