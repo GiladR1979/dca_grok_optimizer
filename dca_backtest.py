@@ -98,7 +98,7 @@ class StrategyParams:
     tp_percent1: float = 50.0               # % to sell at TP1 (optimizable)
     tp_percent2: float = 30.0               # % to sell at TP2 (optimizable)
     tp_percent3: float = 20.0               # % to sell at TP3 (optimizable)
-    rsi_entry_threshold: float = 30.0       # RSI entry threshold (CONSTANT)
+    rsi_entry_threshold: float = 40.0       # RSI entry threshold - NOW 1H RSI < 40 (CONSTANT)
     rsi_safety_threshold: float = 30.0      # RSI safety threshold (CONSTANT)
     rsi_exit_threshold: float = 70.0        # RSI exit threshold (CONSTANT)
     fees: float = 0.075                     # Trading fees % (CONSTANT - 0.075% realistic)
@@ -151,17 +151,21 @@ class DCAStrategy:
         return not self.active_deal
 
     def check_entry_conditions(self, row: pd.Series, indicators: Dict) -> bool:
-        """Check if entry conditions are met"""
+        """Check if entry conditions are met - REVISED FOR HIGHER FREQUENCY"""
         try:
-            rsi_4h = indicators.get('rsi_4h', 50)
+            # NEW CONDITIONS:
+            # 1. RSI(14) < 40 on 1H (instead of RSI < 30 on 4H)
+            rsi_1h = indicators.get('rsi_1h', 50)
+            rsi_condition = rsi_1h < self.params.rsi_entry_threshold  # Now 40 on 1H
+
+            # 2. Fast SMA(12) > Slow SMA(26) on 1H (unchanged - bullish bias)
             sma_fast_1h = indicators.get('sma_fast_1h', row['close'])
             sma_slow_1h = indicators.get('sma_slow_1h', row['close'])
-            sma_50_1h = indicators.get('sma_50_1h', row['close'])
-
-            # Entry conditions
-            rsi_condition = rsi_4h < self.params.rsi_entry_threshold
             sma_condition = sma_fast_1h > sma_slow_1h
-            momentum_condition = row['close'] > sma_50_1h
+
+            # 3. Price > VWAP(14) on 1H (instead of price > SMA(50))
+            vwap_1h = indicators.get('vwap_1h', row['close'])
+            momentum_condition = row['close'] > vwap_1h
 
             return rsi_condition and sma_condition and momentum_condition
         except:
@@ -369,15 +373,39 @@ class DataProcessor:
         # Calculate indicators
         print("  Computing RSI indicators...")
         try:
-            # RSI indicators
+            # RSI indicators - NOW ONLY 1H NEEDED FOR ENTRY
             indicators['rsi_1h'] = ta.momentum.RSIIndicator(df_1h['close'], window=14).rsi()
-            indicators['rsi_4h'] = ta.momentum.RSIIndicator(df_4h['close'], window=14).rsi()
+            indicators['rsi_4h'] = ta.momentum.RSIIndicator(df_4h['close'], window=14).rsi()  # Still needed for exit
 
             print("  Computing SMA indicators...")
-            # SMA indicators
+            # SMA indicators for trend confirmation
             indicators['sma_fast_1h'] = ta.trend.SMAIndicator(df_1h['close'], window=12).sma_indicator()
             indicators['sma_slow_1h'] = ta.trend.SMAIndicator(df_1h['close'], window=26).sma_indicator()
-            indicators['sma_50_1h'] = ta.trend.SMAIndicator(df_1h['close'], window=50).sma_indicator()
+
+            print("  Computing VWAP indicator...")
+
+            # VWAP(14) calculation - Volume Weighted Average Price
+            def calculate_vwap(df, window=14):
+                """Calculate Volume Weighted Average Price"""
+                typical_price = (df['high'] + df['low'] + df['close']) / 3
+                vwap_numerator = (typical_price * df['vol']).rolling(window=window).sum()
+                vwap_denominator = df['vol'].rolling(window=window).sum()
+                # Handle division by zero
+                vwap = vwap_numerator / vwap_denominator
+                return vwap.fillna(df['close'])  # Fallback to close price if no volume
+
+            indicators['vwap_1h'] = calculate_vwap(df_1h, window=14)
+
+            # DEBUG: Check for NaN values
+            for name, series in indicators.items():
+                nan_count = series.isna().sum()
+                valid_count = len(series) - nan_count
+                if valid_count > 0:
+                    first_valid = series.dropna().iloc[0]
+                    print(f"    {name}: {valid_count} valid, {nan_count} NaN, first_valid: {first_valid:.4f}")
+                else:
+                    print(f"    {name}: {valid_count} valid, {nan_count} NaN, NO VALID VALUES")
+
             print("  ✓ Technical indicators calculated successfully")
 
         except Exception as e:
@@ -388,7 +416,7 @@ class DataProcessor:
             indicators['rsi_4h'] = pd.Series(50, index=df_4h.index)
             indicators['sma_fast_1h'] = df_1h['close'].rolling(12).mean()
             indicators['sma_slow_1h'] = df_1h['close'].rolling(26).mean()
-            indicators['sma_50_1h'] = df_1h['close'].rolling(50).mean()
+            indicators['vwap_1h'] = df_1h['close'].rolling(14).mean()  # Simple fallback
 
         return indicators, df_1h, df_4h
 
@@ -424,13 +452,13 @@ class Backtester:
         strategy = DCAStrategy(params, self.initial_balance)
 
         for timestamp, row in self.data.iterrows():
-            # Get current indicator values
+            # Get current indicator values - UPDATED FOR NEW CONDITIONS
             current_indicators = {
                 'rsi_1h': self.get_indicator_value(timestamp, 'rsi_1h'),
-                'rsi_4h': self.get_indicator_value(timestamp, 'rsi_4h'),
+                'rsi_4h': self.get_indicator_value(timestamp, 'rsi_4h'),  # Still needed for exit
                 'sma_fast_1h': self.get_indicator_value(timestamp, 'sma_fast_1h'),
                 'sma_slow_1h': self.get_indicator_value(timestamp, 'sma_slow_1h'),
-                'sma_50_1h': self.get_indicator_value(timestamp, 'sma_50_1h')
+                'vwap_1h': self.get_indicator_value(timestamp, 'vwap_1h')  # NEW: VWAP instead of SMA(50)
             }
 
             # Check for new entry
@@ -526,8 +554,8 @@ class GPUBatchSimulator:
         print("    ✓ SMA Fast 1H tensor ready")
         self.sma_slow_1h_values = self._prepare_indicator_tensor(data.index, indicators.get('sma_slow_1h', pd.Series()))
         print("    ✓ SMA Slow 1H tensor ready")
-        self.sma_50_1h_values = self._prepare_indicator_tensor(data.index, indicators.get('sma_50_1h', pd.Series()))
-        print("    ✓ SMA 50 1H tensor ready")
+        self.vwap_1h_values = self._prepare_indicator_tensor(data.index, indicators.get('vwap_1h', pd.Series()))
+        print("    ✓ VWAP 1H tensor ready")
 
         print("  Calculating optimal batch size for GPU memory...")
         # Memory management
@@ -690,19 +718,20 @@ class GPUBatchSimulator:
                     current_rsi_4h = self.rsi_4h_values[i] if i < len(self.rsi_4h_values) else 50.0
                     current_sma_fast = self.sma_fast_1h_values[i] if i < len(self.sma_fast_1h_values) else current_price
                     current_sma_slow = self.sma_slow_1h_values[i] if i < len(self.sma_slow_1h_values) else current_price
-                    current_sma_50 = self.sma_50_1h_values[i] if i < len(self.sma_50_1h_values) else current_price
+                    current_vwap = self.vwap_1h_values[i] if i < len(self.vwap_1h_values) else current_price
 
                     # Add debug logging for first iteration
                     if i == 0:
                         print(f"    Debug first iteration - Price: {current_price:.4f}")
                         print(
-                            f"    RSI4H: {current_rsi_4h:.1f}, SMA_fast: {current_sma_fast:.4f}, SMA_slow: {current_sma_slow:.4f}")
+                            f"    RSI1H: {current_rsi_1h:.1f}, SMA_fast: {current_sma_fast:.4f}, SMA_slow: {current_sma_slow:.4f}, VWAP: {current_vwap:.4f}")
+                        print(
+                            f"    Entry conditions: RSI1H<40: {current_rsi_1h < 40.0}, SMA_cross: {current_sma_fast > current_sma_slow}, VWAP: {current_price > current_vwap}")
 
-                    # Entry conditions
-                    rsi_entry_ok = current_rsi_4h < rsi_entry_thresholds
+                    # Entry conditions - REVISED
+                    rsi_entry_ok = current_rsi_1h < rsi_entry_thresholds  # Now 1H RSI < 40
                     sma_ok = current_sma_fast > current_sma_slow
-                    momentum_ok = current_price > current_sma_50
-                    can_enter = ~active_deals & rsi_entry_ok & sma_ok & momentum_ok
+                    momentum_ok = current_price > current_vwap  # VWAP instead of SMA(50)
 
                     # Execute base orders
                     base_amounts = balances * (base_percents / 100.0)
@@ -800,7 +829,7 @@ class GPUBatchSimulator:
                     portfolio_values = balances + position_sizes * current_price
                     balance_history[:, i] = portfolio_values
 
-                    # Progress logging every 10k iterations
+                    # Progress logging every 50k iterations
                     if i % 10000 == 0 and i > 0:
                         print(f"    GPU simulation progress: {i}/{data_length} ({i / data_length * 100:.1f}%)")
 
@@ -962,9 +991,9 @@ class Optimizer:
                 print(f"✗ GPU initialization failed: {e}")
                 self.use_gpu = False
 
-    def objective(self, trial):
-        """Optuna objective function with discrete values"""
-        params = StrategyParams(
+    def _suggest_params(self, trial):
+        """Suggest parameters using Optuna trial"""
+        return StrategyParams(
             # CONSTANT PARAMETERS (not optimized)
             base_percent=1.0,
             step_multiplier=1.5,
@@ -976,18 +1005,19 @@ class Optimizer:
             fees=0.075,
 
             # OPTIMIZABLE PARAMETERS (discrete values)
-            initial_deviation=trial.suggest_categorical('initial_deviation',
-                                                        [2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6,
-                                                         3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8,
-                                                         4.9, 5.0]),
+            initial_deviation=trial.suggest_categorical('initial_deviation', [3.0]),
             trailing_deviation=trial.suggest_categorical('trailing_deviation', [5.0, 6.0, 7.0, 8.0, 9.0, 10.0]),
-            tp_level1=trial.suggest_categorical('tp_level1', [3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
-            tp_level2=trial.suggest_categorical('tp_level2', [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]),
-            tp_level3=trial.suggest_categorical('tp_level3', [15.0, 17.0, 20.0, 22.0, 25.0]),
-            tp_percent1=trial.suggest_categorical('tp_percent1', [30.0, 40.0, 50.0, 60.0, 70.0]),
-            tp_percent2=trial.suggest_categorical('tp_percent2', [20.0, 25.0, 30.0, 35.0, 40.0]),
-            tp_percent3=trial.suggest_categorical('tp_percent3', [10.0, 15.0, 20.0, 25.0, 30.0])
+            tp_level1=trial.suggest_categorical('tp_level1', [5.0]),
+            tp_level2=trial.suggest_categorical('tp_level2', [10.0]),
+            tp_level3=trial.suggest_categorical('tp_level3', [15.0, 20.0]),
+            tp_percent1=trial.suggest_categorical('tp_percent1', [50.0]),
+            tp_percent2=trial.suggest_categorical('tp_percent2', [30.0]),
+            tp_percent3=trial.suggest_categorical('tp_percent3', [20.0])
         )
+
+    def objective(self, trial):
+        """Optuna objective function with discrete values"""
+        params = self._suggest_params(trial)
 
         try:
             apy, max_drawdown, _, _ = self.backtester.simulate_strategy(params)
@@ -1038,43 +1068,19 @@ class Optimizer:
             return -1000  # Heavy penalty for failed trials
 
     def optimize_gpu_batch(self, n_trials: int = 100) -> Dict:
-        """GPU-accelerated batch optimization"""
+        """GPU-accelerated batch optimization with Optuna's Bayesian sampling"""
         if not self.use_gpu:
             return self.optimize(n_trials, 1)  # Fall back to CPU
 
-        print(f"Starting GPU batch optimization with {n_trials} trials...")
+        print(f"Starting GPU batch optimization with Optuna Bayesian sampling for {n_trials} trials...")
         print("Optimizing for: 60% APY + 40% Drawdown reduction")
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"Batch size: {self.gpu_simulator.max_batch_size}")
         print("=" * 80)
 
-        # Generate all parameter combinations
-        all_params = []
-        for _ in range(n_trials):
-            params = StrategyParams(
-                # CONSTANT PARAMETERS
-                base_percent=1.0,
-                step_multiplier=1.5,
-                volume_multiplier=1.2,
-                max_safeties=8,
-                rsi_entry_threshold=30.0,
-                rsi_safety_threshold=30.0,
-                rsi_exit_threshold=70.0,
-                fees=0.075,
-
-                # OPTIMIZABLE PARAMETERS (discrete random selection)
-                initial_deviation=np.random.choice(
-                    [2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4,
-                     4.5, 4.6, 4.7, 4.8, 4.9, 5.0]),
-                trailing_deviation=np.random.choice([5.0, 6.0, 7.0, 8.0, 9.0, 10.0]),
-                tp_level1=np.random.choice([3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
-                tp_level2=np.random.choice([8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]),
-                tp_level3=np.random.choice([15.0, 17.0, 20.0, 22.0, 25.0]),
-                tp_percent1=np.random.choice([30.0, 40.0, 50.0, 60.0, 70.0]),
-                tp_percent2=np.random.choice([20.0, 25.0, 30.0, 35.0, 40.0]),
-                tp_percent3=np.random.choice([10.0, 15.0, 20.0, 25.0, 30.0])
-            )
-            all_params.append(params)
+        # Set up Optuna study
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        study = optuna.create_study(direction='maximize')
 
         # Process in batches
         batch_size = self.gpu_simulator.max_batch_size
@@ -1087,13 +1093,24 @@ class Optimizer:
             ncols=80
         )
 
+        trials_completed = 0
         try:
-            for i in range(0, n_trials, batch_size):
-                batch_params = all_params[i:i + batch_size]
+            while trials_completed < n_trials:
+                current_batch_size = min(batch_size, n_trials - trials_completed)
+
+                # Ask for a batch of trials
+                optuna_trials = []
+                batch_params = []
+                for _ in range(current_batch_size):
+                    trial = study.ask()
+                    params = self._suggest_params(trial)
+                    optuna_trials.append(trial)
+                    batch_params.append(params)
 
                 # Force much smaller batches for large datasets
                 if len(self.gpu_simulator.prices) > 1000000:
                     batch_params = batch_params[:min(16, len(batch_params))]
+                    optuna_trials = optuna_trials[:len(batch_params)]
                     print(f"  Large dataset - limiting to {len(batch_params)} simulations per batch")
 
                 # Aggressive memory management
@@ -1101,7 +1118,7 @@ class Optimizer:
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
 
-                print(f"  Processing batch {i // batch_size + 1} with {len(batch_params)} simulations...")
+                print(f"  Processing batch {(trials_completed // batch_size) + 1} with {len(batch_params)} simulations...")
                 print(f"  GPU Memory before: {torch.cuda.memory_allocated(0) / 1024 ** 3:.1f}GB")
 
                 # Add error protection (no timeout, as it doesn't interrupt properly)
@@ -1114,25 +1131,25 @@ class Optimizer:
 
                 print(f"  ✓ Batch completed successfully")
 
-                # Update best results
+                # Tell Optuna the results and update best
                 for j, (apy, max_drawdown) in enumerate(batch_results):
                     fitness = 0.6 * apy - 0.4 * max_drawdown
+                    study.tell(optuna_trials[j], fitness)
 
                     if fitness > self.best_fitness:
                         self.best_fitness = fitness
                         self.best_apy = apy
                         self.best_drawdown = max_drawdown
-                        param_idx = i + j
                         self.best_params = {
                             # Only track optimizable parameters
-                            'initial_deviation': all_params[param_idx].initial_deviation,
-                            'trailing_deviation': all_params[param_idx].trailing_deviation,
-                            'tp_level1': all_params[param_idx].tp_level1,
-                            'tp_level2': all_params[param_idx].tp_level2,
-                            'tp_level3': all_params[param_idx].tp_level3,
-                            'tp_percent1': all_params[param_idx].tp_percent1,
-                            'tp_percent2': all_params[param_idx].tp_percent2,
-                            'tp_percent3': all_params[param_idx].tp_percent3,
+                            'initial_deviation': batch_params[j].initial_deviation,
+                            'trailing_deviation': batch_params[j].trailing_deviation,
+                            'tp_level1': batch_params[j].tp_level1,
+                            'tp_level2': batch_params[j].tp_level2,
+                            'tp_level3': batch_params[j].tp_level3,
+                            'tp_percent1': batch_params[j].tp_percent1,
+                            'tp_percent2': batch_params[j].tp_percent2,
+                            'tp_percent3': batch_params[j].tp_percent3,
 
                             # Include constants for reference
                             'base_percent': 1.0,
@@ -1146,11 +1163,12 @@ class Optimizer:
                         }
 
                 all_results.extend(batch_results)
+                trials_completed += len(batch_results)
 
                 # Update progress
                 desc = f"Best: APY={self.best_apy:.1f}% DD={self.best_drawdown:.1f}% Fitness={self.best_fitness:.1f}"
                 self.progress_bar.set_description(desc)
-                self.progress_bar.update(len(batch_params))
+                self.progress_bar.update(len(batch_results))
 
         except KeyboardInterrupt:
             print("\nOptimization interrupted by user")
