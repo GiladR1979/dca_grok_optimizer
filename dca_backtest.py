@@ -755,6 +755,14 @@ class GPUBatchSimulator:
                         print(
                             f"    Entry conditions: RSI1H<40: {current_rsi_1h < 40.0}, SMA_cross: {current_sma_fast > current_sma_slow}")
 
+                    if i % 50000 == 0 and i > 0:
+                        # Aggressive memory cleanup for large datasets
+                        if len(self.prices) > 1000000:
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()
+
+                        print(f"    GPU simulation progress: {i}/{data_length} ({i / data_length * 100:.1f}%)")
+
                     # Entry conditions - SIMPLIFIED TO 2 CONDITIONS
                     rsi_entry_ok = current_rsi_1h < rsi_entry_thresholds  # RSI < 40 on 1H
                     sma_ok = current_sma_fast > current_sma_slow  # SMA cross bullish
