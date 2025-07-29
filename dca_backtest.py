@@ -86,26 +86,64 @@ class Trade:
 @dataclass
 class StrategyParams:
     """Strategy parameters for optimization"""
-    base_percent: float = 1.0              # Base order as % of balance (constant)
-    initial_deviation: float = 3.0          # Initial safety order deviation % (optimizable)
-    step_multiplier: float = 1.5            # Geometric step multiplier (CONSTANT)
-    volume_multiplier: float = 1.2          # Volume scaling multiplier (CONSTANT)
-    max_safeties: int = 8                   # Maximum safety orders (CONSTANT)
-    trailing_deviation: float = 7.0         # Trailing stop % (optimizable)
-    tp_level1: float = 5.0                  # First TP level % (optimizable)
-    tp_level2: float = 10.0                 # Second TP level % (optimizable)
-    tp_level3: float = 15.0                 # Third TP level % (optimizable)
-    tp_percent1: float = 50.0               # % to sell at TP1 (optimizable)
-    tp_percent2: float = 30.0               # % to sell at TP2 (optimizable)
-    tp_percent3: float = 20.0               # % to sell at TP3 (optimizable)
-    rsi_entry_threshold: float = 40.0       # RSI entry threshold - NOW 1H RSI < 40 (CONSTANT)
-    rsi_safety_threshold: float = 30.0      # RSI safety threshold (CONSTANT)
-    rsi_exit_threshold: float = 70.0        # RSI exit threshold (CONSTANT)
-    fees: float = 0.075                     # Trading fees % (CONSTANT - 0.075% realistic)
+    base_percent: float = 1.0  # Base order as % of balance (constant)
+    initial_deviation: float = 3.0  # Initial safety order deviation % (optimizable)
+    step_multiplier: float = 1.5  # Geometric step multiplier (CONSTANT)
+    volume_multiplier: float = 1.2  # Volume scaling multiplier (CONSTANT)
+    max_safeties: int = 8  # Maximum safety orders (CONSTANT)
+    trailing_deviation: float = 3.0  # Trailing stop % - NOW LIMITED TO TP1 MAX
+    tp_level1: float = 3.0  # First TP level % (optimizable 1-5)
+    # tp_level2 and tp_level3 are now calculated dynamically
+    tp_percent1: float = 50.0  # % to sell at TP1 (optimizable)
+    tp_percent2: float = 30.0  # % to sell at TP2 (optimizable)
+    tp_percent3: float = 20.0  # % to sell at TP3 (optimizable)
+    rsi_entry_threshold: float = 40.0  # RSI entry threshold - 1H RSI < 40 (CONSTANT)
+    rsi_safety_threshold: float = 30.0  # RSI safety threshold (CONSTANT)
+    rsi_exit_threshold: float = 70.0  # RSI exit threshold (CONSTANT)
+    fees: float = 0.075  # Trading fees % (CONSTANT - 0.075% realistic)
+
+    def __post_init__(self):
+        """Ensure trailing deviation doesn't exceed TP1"""
+        if self.trailing_deviation > self.tp_level1:
+            self.trailing_deviation = self.tp_level1
+
+    @property
+    def tp_level2(self) -> float:
+        """TP2 = TP1 × 2"""
+        return self.tp_level1 * 2
+
+    @property
+    def tp_level3(self) -> float:
+        """TP3 = TP1 × 3"""
+        return self.tp_level1 * 3
 
 
 class DCAStrategy:
     """Main DCA strategy implementation"""
+
+    def execute_partial_trailing_exit(self, row: pd.Series, amount_to_sell: float):
+        """Execute partial trailing stop - only TP1 amount"""
+        if amount_to_sell > self.position_size:
+            amount_to_sell = self.position_size
+
+        usdt_received = amount_to_sell * row['close']
+
+        # Apply fees
+        fee_amount = usdt_received * (self.params.fees / 100)
+        net_usdt = usdt_received - fee_amount
+
+        self.balance += net_usdt
+        self.position_size -= amount_to_sell
+
+        # Disable trailing after execution
+        self.trailing_active = False
+
+        self.add_trade(row.name, 'sell', amount_to_sell, row['close'],
+                       usdt_received, 'trailing_stop_partial')
+
+        # Close deal if position is very small
+        if self.position_size < 0.0001:
+            self.close_deal(row.name)
 
     def __init__(self, params: StrategyParams, initial_balance: float = 10000):
         self.params = params
@@ -163,11 +201,7 @@ class DCAStrategy:
             sma_slow_1h = indicators.get('sma_slow_1h', row['close'])
             sma_condition = sma_fast_1h > sma_slow_1h
 
-            # 3. Price > VWAP(14) on 1H (instead of price > SMA(50))
-            vwap_1h = indicators.get('vwap_1h', row['close'])
-            momentum_condition = row['close'] > vwap_1h
-
-            return rsi_condition and sma_condition and momentum_condition
+            return rsi_condition and sma_condition
         except:
             return False
 
@@ -288,7 +322,7 @@ class DCAStrategy:
             self.close_deal(row.name)
 
     def check_trailing_stop(self, row: pd.Series) -> bool:
-        """Check trailing stop condition"""
+        """Check trailing stop condition - deviation limited to TP1 max"""
         if not self.trailing_active or self.position_size <= 0:
             return False
 
@@ -296,14 +330,13 @@ class DCAStrategy:
         if row['close'] > self.peak_price:
             self.peak_price = row['close']
 
-        # Check trailing stop
-        trailing_threshold = self.peak_price * (1 - self.params.trailing_deviation / 100)
+        # Limit trailing deviation to TP1 level maximum
+        effective_trailing_deviation = min(self.params.trailing_deviation, self.params.tp_level1)
+
+        # Check trailing stop with limited deviation
+        trailing_threshold = self.peak_price * (1 - effective_trailing_deviation / 100)
         return row['close'] <= trailing_threshold
 
-    def check_force_exit_conditions(self, row: pd.Series, indicators: Dict) -> bool:
-        """Check conditions that force exit"""
-        rsi_4h = indicators.get('rsi_4h', 50)
-        return rsi_4h > self.params.rsi_exit_threshold
 
     def execute_full_exit(self, row: pd.Series, reason: str):
         """Execute full position exit"""
@@ -382,19 +415,19 @@ class DataProcessor:
             indicators['sma_fast_1h'] = ta.trend.SMAIndicator(df_1h['close'], window=12).sma_indicator()
             indicators['sma_slow_1h'] = ta.trend.SMAIndicator(df_1h['close'], window=26).sma_indicator()
 
-            print("  Computing VWAP indicator...")
-
-            # VWAP(14) calculation - Volume Weighted Average Price
-            def calculate_vwap(df, window=14):
-                """Calculate Volume Weighted Average Price"""
-                typical_price = (df['high'] + df['low'] + df['close']) / 3
-                vwap_numerator = (typical_price * df['vol']).rolling(window=window).sum()
-                vwap_denominator = df['vol'].rolling(window=window).sum()
-                # Handle division by zero
-                vwap = vwap_numerator / vwap_denominator
-                return vwap.fillna(df['close'])  # Fallback to close price if no volume
-
-            indicators['vwap_1h'] = calculate_vwap(df_1h, window=14)
+            # print("  Computing VWAP indicator...")
+            #
+            # # VWAP(14) calculation - Volume Weighted Average Price
+            # def calculate_vwap(df, window=14):
+            #     """Calculate Volume Weighted Average Price"""
+            #     typical_price = (df['high'] + df['low'] + df['close']) / 3
+            #     vwap_numerator = (typical_price * df['vol']).rolling(window=window).sum()
+            #     vwap_denominator = df['vol'].rolling(window=window).sum()
+            #     # Handle division by zero
+            #     vwap = vwap_numerator / vwap_denominator
+            #     return vwap.fillna(df['close'])  # Fallback to close price if no volume
+            #
+            # indicators['vwap_1h'] = calculate_vwap(df_1h, window=14)
 
             # DEBUG: Check for NaN values
             for name, series in indicators.items():
@@ -458,7 +491,6 @@ class Backtester:
                 'rsi_4h': self.get_indicator_value(timestamp, 'rsi_4h'),  # Still needed for exit
                 'sma_fast_1h': self.get_indicator_value(timestamp, 'sma_fast_1h'),
                 'sma_slow_1h': self.get_indicator_value(timestamp, 'sma_slow_1h'),
-                'vwap_1h': self.get_indicator_value(timestamp, 'vwap_1h')  # NEW: VWAP instead of SMA(50)
             }
 
             # Check for new entry
@@ -480,9 +512,6 @@ class Backtester:
                 if strategy.check_trailing_stop(row):
                     strategy.execute_full_exit(row, 'trailing_stop')
 
-                # Check force exit
-                elif strategy.check_force_exit_conditions(row, current_indicators):
-                    strategy.execute_full_exit(row, 'rsi_force_exit')
 
             # Record balance history
             total_value = strategy.balance
@@ -490,10 +519,10 @@ class Backtester:
                 total_value += strategy.position_size * row['close']
             strategy.balance_history.append((timestamp, total_value))
 
-        # Close any remaining position
-        if strategy.active_deal:
-            last_row = self.data.iloc[-1]
-            strategy.execute_full_exit(last_row, 'end_of_data')
+        # # Close any remaining position
+        # if strategy.active_deal:
+        #     last_row = self.data.iloc[-1]
+        #     strategy.execute_full_exit(last_row, 'end_of_data')
 
         # Calculate metrics
         final_balance = strategy.balance
@@ -554,8 +583,6 @@ class GPUBatchSimulator:
         print("    ✓ SMA Fast 1H tensor ready")
         self.sma_slow_1h_values = self._prepare_indicator_tensor(data.index, indicators.get('sma_slow_1h', pd.Series()))
         print("    ✓ SMA Slow 1H tensor ready")
-        self.vwap_1h_values = self._prepare_indicator_tensor(data.index, indicators.get('vwap_1h', pd.Series()))
-        print("    ✓ VWAP 1H tensor ready")
 
         print("  Calculating optimal batch size for GPU memory...")
         # Memory management
@@ -690,8 +717,8 @@ class GPUBatchSimulator:
             trailing_deviations = torch.tensor([p.trailing_deviation for p in param_batch], dtype=torch.float32,
                                                device=self.device)
             tp_level1s = torch.tensor([p.tp_level1 for p in param_batch], dtype=torch.float32, device=self.device)
-            tp_level2s = torch.tensor([p.tp_level2 for p in param_batch], dtype=torch.float32, device=self.device)
-            tp_level3s = torch.tensor([p.tp_level3 for p in param_batch], dtype=torch.float32, device=self.device)
+            tp_level2s = torch.tensor([p.tp_level2 for p in param_batch], dtype=torch.float32, device=self.device)  # Auto-calculated
+            tp_level3s = torch.tensor([p.tp_level3 for p in param_batch], dtype=torch.float32, device=self.device)  # Auto-calculated
             tp_percent1s = torch.tensor([p.tp_percent1 for p in param_batch], dtype=torch.float32, device=self.device)
             tp_percent2s = torch.tensor([p.tp_percent2 for p in param_batch], dtype=torch.float32, device=self.device)
             tp_percent3s = torch.tensor([p.tp_percent3 for p in param_batch], dtype=torch.float32, device=self.device)
@@ -701,6 +728,7 @@ class GPUBatchSimulator:
                                                  device=self.device)
             rsi_exit_thresholds = torch.tensor([p.rsi_exit_threshold for p in param_batch], dtype=torch.float32,
                                                device=self.device)
+
             fees = torch.tensor([p.fees for p in param_batch], dtype=torch.float32, device=self.device)
 
             # Track balance history for drawdown calculation
@@ -718,20 +746,19 @@ class GPUBatchSimulator:
                     current_rsi_4h = self.rsi_4h_values[i] if i < len(self.rsi_4h_values) else 50.0
                     current_sma_fast = self.sma_fast_1h_values[i] if i < len(self.sma_fast_1h_values) else current_price
                     current_sma_slow = self.sma_slow_1h_values[i] if i < len(self.sma_slow_1h_values) else current_price
-                    current_vwap = self.vwap_1h_values[i] if i < len(self.vwap_1h_values) else current_price
 
                     # Add debug logging for first iteration
                     if i == 0:
                         print(f"    Debug first iteration - Price: {current_price:.4f}")
                         print(
-                            f"    RSI1H: {current_rsi_1h:.1f}, SMA_fast: {current_sma_fast:.4f}, SMA_slow: {current_sma_slow:.4f}, VWAP: {current_vwap:.4f}")
+                            f"    RSI1H: {current_rsi_1h:.1f}, SMA_fast: {current_sma_fast:.4f}, SMA_slow: {current_sma_slow:.4f}")
                         print(
-                            f"    Entry conditions: RSI1H<40: {current_rsi_1h < 40.0}, SMA_cross: {current_sma_fast > current_sma_slow}, VWAP: {current_price > current_vwap}")
+                            f"    Entry conditions: RSI1H<40: {current_rsi_1h < 40.0}, SMA_cross: {current_sma_fast > current_sma_slow}")
 
-                    # Entry conditions - REVISED
-                    rsi_entry_ok = current_rsi_1h < rsi_entry_thresholds  # Now 1H RSI < 40
-                    sma_ok = current_sma_fast > current_sma_slow
-                    momentum_ok = current_price > current_vwap  # VWAP instead of SMA(50)
+                    # Entry conditions - SIMPLIFIED TO 2 CONDITIONS
+                    rsi_entry_ok = current_rsi_1h < rsi_entry_thresholds  # RSI < 40 on 1H
+                    sma_ok = current_sma_fast > current_sma_slow  # SMA cross bullish
+                    can_enter = ~active_deals & rsi_entry_ok & sma_ok  # REMOVED momentum_ok
 
                     # Execute base orders
                     base_amounts = balances * (base_percents / 100.0)
@@ -993,23 +1020,29 @@ class Optimizer:
 
     def _suggest_params(self, trial):
         """Suggest parameters using Optuna trial"""
+        tp_level1 = trial.suggest_categorical('tp_level1', [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])
+
+        # Trailing deviation limited to TP1 value
+        max_trailing = tp_level1  # Can't exceed TP1
+        trailing_options = [x for x in [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0] if x <= max_trailing]
+        trailing_deviation = trial.suggest_categorical('trailing_deviation', trailing_options)
         return StrategyParams(
-            # CONSTANT PARAMETERS (not optimized)
+            # CONSTANT PARAMETERS
             base_percent=1.0,
             step_multiplier=1.5,
             volume_multiplier=1.2,
             max_safeties=8,
-            rsi_entry_threshold=30.0,
+            rsi_entry_threshold=40.0,
             rsi_safety_threshold=30.0,
             rsi_exit_threshold=70.0,
             fees=0.075,
 
-            # OPTIMIZABLE PARAMETERS (discrete values)
+            # OPTIMIZABLE PARAMETERS - WIDER RANGES
             initial_deviation=trial.suggest_categorical('initial_deviation', [3.0]),
-            trailing_deviation=trial.suggest_categorical('trailing_deviation', [5.0, 6.0, 7.0, 8.0, 9.0, 10.0]),
-            tp_level1=trial.suggest_categorical('tp_level1', [5.0]),
-            tp_level2=trial.suggest_categorical('tp_level2', [10.0]),
-            tp_level3=trial.suggest_categorical('tp_level3', [15.0, 20.0]),
+            tp_level1=tp_level1,
+            trailing_deviation=trailing_deviation,
+            # 1-5 range
+            # tp_level2 and tp_level3 are calculated automatically as tp1*2 and tp1*3
             tp_percent1=trial.suggest_categorical('tp_percent1', [50.0]),
             tp_percent2=trial.suggest_categorical('tp_percent2', [30.0]),
             tp_percent3=trial.suggest_categorical('tp_percent3', [20.0])
@@ -1036,8 +1069,8 @@ class Optimizer:
                     'initial_deviation': params.initial_deviation,
                     'trailing_deviation': params.trailing_deviation,
                     'tp_level1': params.tp_level1,
-                    'tp_level2': params.tp_level2,
-                    'tp_level3': params.tp_level3,
+                    'tp_level2': params.tp_level2,  # Show calculated value
+                    'tp_level3': params.tp_level3,  # Show calculated value
                     'tp_percent1': params.tp_percent1,
                     'tp_percent2': params.tp_percent2,
                     'tp_percent3': params.tp_percent3,
@@ -1047,7 +1080,7 @@ class Optimizer:
                     'step_multiplier': 1.5,
                     'volume_multiplier': 1.2,
                     'max_safeties': 8,
-                    'rsi_entry_threshold': 30.0,
+                    'rsi_entry_threshold': 40.0,
                     'rsi_safety_threshold': 30.0,
                     'rsi_exit_threshold': 70.0,
                     'fees': 0.075
