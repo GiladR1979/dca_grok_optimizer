@@ -66,22 +66,22 @@ class Trade:
 @dataclass
 class StrategyParams:
     """Strategy parameters for optimization"""
-    base_percent: float = 1.0  # Base order as % of balance
-    initial_deviation: float = 3.0  # Initial safety order deviation %
-    step_multiplier: float = 1.5  # Geometric step multiplier
-    volume_multiplier: float = 1.2  # Volume scaling multiplier
-    max_safeties: int = 8  # Maximum safety orders
-    trailing_deviation: float = 7.0  # Trailing stop %
-    tp_level1: float = 5.0  # First TP level %
-    tp_level2: float = 10.0  # Second TP level %
-    tp_level3: float = 15.0  # Third TP level %
-    tp_percent1: float = 50.0  # % to sell at TP1
-    tp_percent2: float = 30.0  # % to sell at TP2
-    tp_percent3: float = 20.0  # % to sell at TP3
-    rsi_entry_threshold: float = 30.0  # RSI entry threshold
-    rsi_safety_threshold: float = 25.0  # RSI safety threshold
-    rsi_exit_threshold: float = 70.0  # RSI exit threshold
-    fees: float = 0.0  # Trading fees %
+    base_percent: float = 1.0              # Base order as % of balance (constant)
+    initial_deviation: float = 3.0          # Initial safety order deviation % (optimizable)
+    step_multiplier: float = 1.5            # Geometric step multiplier (CONSTANT)
+    volume_multiplier: float = 1.2          # Volume scaling multiplier (CONSTANT)
+    max_safeties: int = 8                   # Maximum safety orders (CONSTANT)
+    trailing_deviation: float = 7.0         # Trailing stop % (optimizable)
+    tp_level1: float = 5.0                  # First TP level % (optimizable)
+    tp_level2: float = 10.0                 # Second TP level % (optimizable)
+    tp_level3: float = 15.0                 # Third TP level % (optimizable)
+    tp_percent1: float = 50.0               # % to sell at TP1 (optimizable)
+    tp_percent2: float = 30.0               # % to sell at TP2 (optimizable)
+    tp_percent3: float = 20.0               # % to sell at TP3 (optimizable)
+    rsi_entry_threshold: float = 30.0       # RSI entry threshold (CONSTANT)
+    rsi_safety_threshold: float = 30.0      # RSI safety threshold (CONSTANT)
+    rsi_exit_threshold: float = 70.0        # RSI exit threshold (CONSTANT)
+    fees: float = 0.075                     # Trading fees % (CONSTANT - 0.075% realistic)
 
 
 class DCAStrategy:
@@ -545,9 +545,14 @@ class GPUBatchSimulator:
 
             # Forward fill indicator values to match data timestamps
             aligned_values = []
-            last_value = 50.0  # Default fallback
+            last_value = 50.0
 
-            for ts in timestamps:
+            print(f"      Processing {len(timestamps)} timestamps...")
+
+            for i, ts in enumerate(timestamps):
+                if i % 20000 == 0:  # Progress every 200k points
+                    print(f"        Progress: {i}/{len(timestamps)} ({i / len(timestamps) * 100:.1f}%)")
+
                 # Find most recent indicator value
                 valid_indices = indicator_series.index <= ts
                 if valid_indices.any():
@@ -808,21 +813,30 @@ class Optimizer:
                 self.use_gpu = False
 
     def objective(self, trial):
-        """Optuna objective function"""
+        """Optuna objective function with discrete values"""
         params = StrategyParams(
-            base_percent=trial.suggest_float('base_percent', 0.5, 2.0),
-            initial_deviation=trial.suggest_float('initial_deviation', 2.0, 5.0),
-            step_multiplier=trial.suggest_float('step_multiplier', 1.1, 1.6),
-            volume_multiplier=trial.suggest_float('volume_multiplier', 1.1, 1.6),
-            max_safeties=trial.suggest_int('max_safeties', 5, 10),
-            trailing_deviation=trial.suggest_float('trailing_deviation', 5.0, 10.0),
-            tp_level1=trial.suggest_float('tp_level1', 3.0, 8.0),
-            tp_level2=trial.suggest_float('tp_level2', 8.0, 15.0),
-            tp_level3=trial.suggest_float('tp_level3', 15.0, 25.0),
-            rsi_entry_threshold=trial.suggest_float('rsi_entry_threshold', 25.0, 35.0),
-            rsi_safety_threshold=trial.suggest_float('rsi_safety_threshold', 20.0, 30.0),
-            rsi_exit_threshold=trial.suggest_float('rsi_exit_threshold', 65.0, 75.0),
-            fees=trial.suggest_float('fees', 0.0, 0.1)
+            # CONSTANT PARAMETERS (not optimized)
+            base_percent=1.0,
+            step_multiplier=1.5,
+            volume_multiplier=1.2,
+            max_safeties=8,
+            rsi_entry_threshold=30.0,
+            rsi_safety_threshold=30.0,
+            rsi_exit_threshold=70.0,
+            fees=0.075,
+
+            # OPTIMIZABLE PARAMETERS (discrete values)
+            initial_deviation=trial.suggest_categorical('initial_deviation',
+                                                        [2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6,
+                                                         3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8,
+                                                         4.9, 5.0]),
+            trailing_deviation=trial.suggest_categorical('trailing_deviation', [5.0, 6.0, 7.0, 8.0, 9.0, 10.0]),
+            tp_level1=trial.suggest_categorical('tp_level1', [3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+            tp_level2=trial.suggest_categorical('tp_level2', [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]),
+            tp_level3=trial.suggest_categorical('tp_level3', [15.0, 17.0, 20.0, 22.0, 25.0]),
+            tp_percent1=trial.suggest_categorical('tp_percent1', [30.0, 40.0, 50.0, 60.0, 70.0]),
+            tp_percent2=trial.suggest_categorical('tp_percent2', [20.0, 25.0, 30.0, 35.0, 40.0]),
+            tp_percent3=trial.suggest_categorical('tp_percent3', [10.0, 15.0, 20.0, 25.0, 30.0])
         )
 
         try:
@@ -838,19 +852,25 @@ class Optimizer:
                 self.best_apy = apy
                 self.best_drawdown = max_drawdown
                 self.best_params = {
-                    'base_percent': params.base_percent,
+                    # Only track optimizable parameters
                     'initial_deviation': params.initial_deviation,
-                    'step_multiplier': params.step_multiplier,
-                    'volume_multiplier': params.volume_multiplier,
-                    'max_safeties': params.max_safeties,
                     'trailing_deviation': params.trailing_deviation,
                     'tp_level1': params.tp_level1,
                     'tp_level2': params.tp_level2,
                     'tp_level3': params.tp_level3,
-                    'rsi_entry_threshold': params.rsi_entry_threshold,
-                    'rsi_safety_threshold': params.rsi_safety_threshold,
-                    'rsi_exit_threshold': params.rsi_exit_threshold,
-                    'fees': params.fees
+                    'tp_percent1': params.tp_percent1,
+                    'tp_percent2': params.tp_percent2,
+                    'tp_percent3': params.tp_percent3,
+
+                    # Include constants for reference
+                    'base_percent': 1.0,
+                    'step_multiplier': 1.5,
+                    'volume_multiplier': 1.2,
+                    'max_safeties': 8,
+                    'rsi_entry_threshold': 30.0,
+                    'rsi_safety_threshold': 30.0,
+                    'rsi_exit_threshold': 70.0,
+                    'fees': 0.075
                 }
 
             # Update progress bar description with best results
@@ -882,19 +902,27 @@ class Optimizer:
         all_params = []
         for _ in range(n_trials):
             params = StrategyParams(
-                base_percent=np.random.uniform(0.5, 2.0),
-                initial_deviation=np.random.uniform(2.0, 5.0),
-                step_multiplier=np.random.uniform(1.1, 1.6),
-                volume_multiplier=np.random.uniform(1.1, 1.6),
-                max_safeties=np.random.randint(5, 11),
-                trailing_deviation=np.random.uniform(5.0, 10.0),
-                tp_level1=np.random.uniform(3.0, 8.0),
-                tp_level2=np.random.uniform(8.0, 15.0),
-                tp_level3=np.random.uniform(15.0, 25.0),
-                rsi_entry_threshold=np.random.uniform(25.0, 35.0),
-                rsi_safety_threshold=np.random.uniform(20.0, 30.0),
-                rsi_exit_threshold=np.random.uniform(65.0, 75.0),
-                fees=np.random.uniform(0.0, 0.1)
+                # CONSTANT PARAMETERS
+                base_percent=1.0,
+                step_multiplier=1.5,
+                volume_multiplier=1.2,
+                max_safeties=8,
+                rsi_entry_threshold=30.0,
+                rsi_safety_threshold=30.0,
+                rsi_exit_threshold=70.0,
+                fees=0.075,
+
+                # OPTIMIZABLE PARAMETERS (discrete random selection)
+                initial_deviation=np.random.choice(
+                    [2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4,
+                     4.5, 4.6, 4.7, 4.8, 4.9, 5.0]),
+                trailing_deviation=np.random.choice([5.0, 6.0, 7.0, 8.0, 9.0, 10.0]),
+                tp_level1=np.random.choice([3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+                tp_level2=np.random.choice([8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0]),
+                tp_level3=np.random.choice([15.0, 17.0, 20.0, 22.0, 25.0]),
+                tp_percent1=np.random.choice([30.0, 40.0, 50.0, 60.0, 70.0]),
+                tp_percent2=np.random.choice([20.0, 25.0, 30.0, 35.0, 40.0]),
+                tp_percent3=np.random.choice([10.0, 15.0, 20.0, 25.0, 30.0])
             )
             all_params.append(params)
 
@@ -930,19 +958,25 @@ class Optimizer:
                             self.best_drawdown = max_drawdown
                             param_idx = i + j
                             self.best_params = {
-                                'base_percent': all_params[param_idx].base_percent,
-                                'initial_deviation': all_params[param_idx].initial_deviation,
-                                'step_multiplier': all_params[param_idx].step_multiplier,
-                                'volume_multiplier': all_params[param_idx].volume_multiplier,
-                                'max_safeties': all_params[param_idx].max_safeties,
-                                'trailing_deviation': all_params[param_idx].trailing_deviation,
-                                'tp_level1': all_params[param_idx].tp_level1,
-                                'tp_level2': all_params[param_idx].tp_level2,
-                                'tp_level3': all_params[param_idx].tp_level3,
-                                'rsi_entry_threshold': all_params[param_idx].rsi_entry_threshold,
-                                'rsi_safety_threshold': all_params[param_idx].rsi_safety_threshold,
-                                'rsi_exit_threshold': all_params[param_idx].rsi_exit_threshold,
-                                'fees': all_params[param_idx].fees
+                                # Only track optimizable parameters
+                                'initial_deviation': params.initial_deviation,
+                                'trailing_deviation': params.trailing_deviation,
+                                'tp_level1': params.tp_level1,
+                                'tp_level2': params.tp_level2,
+                                'tp_level3': params.tp_level3,
+                                'tp_percent1': params.tp_percent1,
+                                'tp_percent2': params.tp_percent2,
+                                'tp_percent3': params.tp_percent3,
+
+                                # Include constants for reference
+                                'base_percent': 1.0,
+                                'step_multiplier': 1.5,
+                                'volume_multiplier': 1.2,
+                                'max_safeties': 8,
+                                'rsi_entry_threshold': 30.0,
+                                'rsi_safety_threshold': 30.0,
+                                'rsi_exit_threshold': 70.0,
+                                'fees': 0.075
                             }
 
                     all_results.extend(batch_results)
