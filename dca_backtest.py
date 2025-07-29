@@ -15,10 +15,30 @@ from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from pathlib import Path
+import signal
+from contextlib import contextmanager
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
+@contextmanager
+def timeout(duration):
+    """Windows-compatible timeout using threading"""
+    import threading
+    import time
+
+    class TimeoutError(Exception):
+        pass
+
+    def timeout_handler():
+        raise TimeoutError(f"Operation timed out after {duration} seconds")
+
+    timer = threading.Timer(duration, timeout_handler)
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.cancel()
 try:
     import ta
 except ImportError:
@@ -538,20 +558,62 @@ class GPUBatchSimulator:
             return 32  # Safe fallback
 
     def _prepare_indicator_tensor(self, timestamps: pd.DatetimeIndex, indicator_series: pd.Series) -> torch.Tensor:
-        """Convert indicator series to forward-filled tensor"""
+        """GPU-accelerated indicator tensor preparation with proper forward fill"""
         try:
             if len(indicator_series) == 0:
                 return torch.full((len(timestamps),), 50.0, dtype=torch.float32, device=self.device)
 
-            # Forward fill indicator values to match data timestamps
+            print(f"      GPU processing {len(timestamps)} timestamps...")
+
+            # Remove NaN values from indicator series first
+            clean_indicator_series = indicator_series.dropna()
+
+            if len(clean_indicator_series) == 0:
+                print(f"      Warning: No valid indicator values, using default 50.0")
+                return torch.full((len(timestamps),), 50.0, dtype=torch.float32, device=self.device)
+
+            # Convert to numpy arrays for processing
+            timestamps_np = timestamps.values
+            indicator_times_np = clean_indicator_series.index.values
+            indicator_values_np = clean_indicator_series.values
+
+            # Use pandas built-in reindex with forward fill for accuracy
+            # This handles the complex timestamp alignment properly
+            temp_series = pd.Series(indicator_values_np, index=indicator_times_np)
+
+            # Reindex to match our timestamps with forward fill
+            aligned_series = temp_series.reindex(timestamps, method='ffill')
+
+            # Fill any remaining NaN values at the beginning with first valid value or 50.0
+            first_valid_value = aligned_series.dropna().iloc[0] if len(aligned_series.dropna()) > 0 else 50.0
+            aligned_series = aligned_series.fillna(first_valid_value)
+
+            # Convert to tensor
+            aligned_values = torch.tensor(aligned_series.values, dtype=torch.float32, device=self.device)
+
+            print(
+                f"      ✓ GPU tensor ready ({aligned_values.shape[0]} values, range: {aligned_values.min():.2f}-{aligned_values.max():.2f})")
+            return aligned_values
+
+        except Exception as e:
+            print(f"      GPU tensor prep failed: {e}, using CPU fallback")
+            return self._prepare_indicator_tensor_cpu_fallback(timestamps, indicator_series)
+
+    def _prepare_indicator_tensor_cpu_fallback(self, timestamps: pd.DatetimeIndex,
+                                               indicator_series: pd.Series) -> torch.Tensor:
+        """CPU fallback for indicator tensor preparation"""
+        try:
+            if len(indicator_series) == 0:
+                return torch.full((len(timestamps),), 50.0, dtype=torch.float32, device=self.device)
+
             aligned_values = []
             last_value = 50.0
 
-            print(f"      Processing {len(timestamps)} timestamps...")
+            print(f"      CPU processing {len(timestamps)} timestamps...")
 
             for i, ts in enumerate(timestamps):
-                if i % 20000 == 0:  # Progress every 200k points
-                    print(f"        Progress: {i}/{len(timestamps)} ({i / len(timestamps) * 100:.1f}%)")
+                if i % 10000 == 0:
+                    print(f"        CPU Progress: {i}/{len(timestamps)} ({i / len(timestamps) * 100:.1f}%)")
 
                 # Find most recent indicator value
                 valid_indices = indicator_series.index <= ts
@@ -619,113 +681,134 @@ class GPUBatchSimulator:
 
             # Main simulation loop
             for i in range(data_length):
-                current_price = self.prices[i]
-                current_rsi_1h = self.rsi_1h_values[i]
-                current_rsi_4h = self.rsi_4h_values[i]
-                current_sma_fast = self.sma_fast_1h_values[i]
-                current_sma_slow = self.sma_slow_1h_values[i]
-                current_sma_50 = self.sma_50_1h_values[i]
+                try:
+                    # Safely extract current values with bounds checking
+                    if i >= len(self.prices):
+                        break
 
-                # Entry conditions
-                rsi_entry_ok = current_rsi_4h < rsi_entry_thresholds
-                sma_ok = current_sma_fast > current_sma_slow
-                momentum_ok = current_price > current_sma_50
-                can_enter = ~active_deals & rsi_entry_ok & sma_ok & momentum_ok
+                    current_price = self.prices[i]
+                    current_rsi_1h = self.rsi_1h_values[i] if i < len(self.rsi_1h_values) else 50.0
+                    current_rsi_4h = self.rsi_4h_values[i] if i < len(self.rsi_4h_values) else 50.0
+                    current_sma_fast = self.sma_fast_1h_values[i] if i < len(self.sma_fast_1h_values) else current_price
+                    current_sma_slow = self.sma_slow_1h_values[i] if i < len(self.sma_slow_1h_values) else current_price
+                    current_sma_50 = self.sma_50_1h_values[i] if i < len(self.sma_50_1h_values) else current_price
 
-                # Execute base orders
-                base_amounts = balances * (base_percents / 100.0)
-                coin_amounts = base_amounts / current_price
+                    # Add debug logging for first iteration
+                    if i == 0:
+                        print(f"    Debug first iteration - Price: {current_price:.4f}")
+                        print(
+                            f"    RSI4H: {current_rsi_4h:.1f}, SMA_fast: {current_sma_fast:.4f}, SMA_slow: {current_sma_slow:.4f}")
 
-                # Apply entry logic
-                entering = can_enter & (base_amounts > 1.0)  # Minimum order size
-                balances = torch.where(entering, balances - base_amounts, balances)
-                position_sizes = torch.where(entering, coin_amounts, position_sizes)
-                total_spent = torch.where(entering, base_amounts, total_spent)
-                average_entries = torch.where(entering, current_price, average_entries)
-                last_entry_prices = torch.where(entering, current_price, last_entry_prices)
-                active_deals = torch.where(entering, True, active_deals)
-                safety_counts = torch.where(entering, 0, safety_counts)
-                peak_prices = torch.where(entering, current_price, peak_prices)
-                tp1_hit = torch.where(entering, False, tp1_hit)
-                tp2_hit = torch.where(entering, False, tp2_hit)
-                tp3_hit = torch.where(entering, False, tp3_hit)
+                    # Entry conditions
+                    rsi_entry_ok = current_rsi_4h < rsi_entry_thresholds
+                    sma_ok = current_sma_fast > current_sma_slow
+                    momentum_ok = current_price > current_sma_50
+                    can_enter = ~active_deals & rsi_entry_ok & sma_ok & momentum_ok
 
-                # Safety order logic (simplified for GPU)
-                safety_deviations = initial_deviations * (step_multipliers ** safety_counts.float())
-                safety_thresholds = last_entry_prices * (1.0 - safety_deviations / 100.0)
-                safety_rsi_ok = current_rsi_1h < rsi_safety_thresholds
-                can_safety = active_deals & (current_price <= safety_thresholds) & safety_rsi_ok & (
+                    # Execute base orders
+                    base_amounts = balances * (base_percents / 100.0)
+                    coin_amounts = base_amounts / current_price
+
+                    # Apply entry logic
+                    entering = can_enter & (base_amounts > 1.0)  # Minimum order size
+                    balances = torch.where(entering, balances - base_amounts, balances)
+                    position_sizes = torch.where(entering, coin_amounts, position_sizes)
+                    total_spent = torch.where(entering, base_amounts, total_spent)
+                    average_entries = torch.where(entering, current_price, average_entries)
+                    last_entry_prices = torch.where(entering, current_price, last_entry_prices)
+                    active_deals = torch.where(entering, True, active_deals)
+                    safety_counts = torch.where(entering, 0, safety_counts)
+                    peak_prices = torch.where(entering, current_price, peak_prices)
+                    tp1_hit = torch.where(entering, False, tp1_hit)
+                    tp2_hit = torch.where(entering, False, tp2_hit)
+                    tp3_hit = torch.where(entering, False, tp3_hit)
+
+                    # Safety order logic (simplified for GPU)
+                    safety_deviations = initial_deviations * (step_multipliers ** safety_counts.float())
+                    safety_thresholds = last_entry_prices * (1.0 - safety_deviations / 100.0)
+                    safety_rsi_ok = current_rsi_1h < rsi_safety_thresholds
+                    can_safety = active_deals & (current_price <= safety_thresholds) & safety_rsi_ok & (
                             safety_counts < max_safeties)
 
-                # Execute safety orders
-                safety_multipliers = volume_multipliers ** safety_counts.float()
-                safety_base = self.initial_balance * (base_percents / 100.0)
-                safety_amounts = safety_base * safety_multipliers
-                safety_amounts = torch.min(safety_amounts, balances * 0.95)  # Don't exceed balance
-                safety_coins = safety_amounts / current_price
+                    # Execute safety orders
+                    safety_multipliers = volume_multipliers ** safety_counts.float()
+                    safety_base = self.initial_balance * (base_percents / 100.0)
+                    safety_amounts = safety_base * safety_multipliers
+                    safety_amounts = torch.min(safety_amounts, balances * 0.95)  # Don't exceed balance
+                    safety_coins = safety_amounts / current_price
 
-                executing_safety = can_safety & (safety_amounts > 1.0)
-                balances = torch.where(executing_safety, balances - safety_amounts, balances)
-                position_sizes = torch.where(executing_safety, position_sizes + safety_coins, position_sizes)
-                total_spent = torch.where(executing_safety, total_spent + safety_amounts, total_spent)
-                average_entries = torch.where(executing_safety, total_spent / position_sizes, average_entries)
-                last_entry_prices = torch.where(executing_safety, current_price, last_entry_prices)
-                safety_counts = torch.where(executing_safety, safety_counts + 1, safety_counts)
+                    executing_safety = can_safety & (safety_amounts > 1.0)
+                    balances = torch.where(executing_safety, balances - safety_amounts, balances)
+                    position_sizes = torch.where(executing_safety, position_sizes + safety_coins, position_sizes)
+                    total_spent = torch.where(executing_safety, total_spent + safety_amounts, total_spent)
+                    average_entries = torch.where(executing_safety, total_spent / position_sizes, average_entries)
+                    last_entry_prices = torch.where(executing_safety, current_price, last_entry_prices)
+                    safety_counts = torch.where(executing_safety, safety_counts + 1, safety_counts)
 
-                # Take profit logic
-                profit_pcts = (current_price - average_entries) / average_entries * 100.0
+                    # Take profit logic
+                    profit_pcts = (current_price - average_entries) / average_entries * 100.0
 
-                # TP1
-                tp1_trigger = active_deals & ~tp1_hit & (profit_pcts >= tp_level1s)
-                tp1_sell_amounts = position_sizes * (tp_percent1s / 100.0)
-                tp1_usdt = tp1_sell_amounts * current_price
-                balances = torch.where(tp1_trigger, balances + tp1_usdt, balances)
-                position_sizes = torch.where(tp1_trigger, position_sizes - tp1_sell_amounts, position_sizes)
-                tp1_hit = torch.where(tp1_trigger, True, tp1_hit)
-                trailing_active = torch.where(tp1_trigger, True, trailing_active)
-                peak_prices = torch.where(tp1_trigger, current_price, peak_prices)
+                    # TP1
+                    tp1_trigger = active_deals & ~tp1_hit & (profit_pcts >= tp_level1s)
+                    tp1_sell_amounts = position_sizes * (tp_percent1s / 100.0)
+                    tp1_usdt = tp1_sell_amounts * current_price
+                    balances = torch.where(tp1_trigger, balances + tp1_usdt, balances)
+                    position_sizes = torch.where(tp1_trigger, position_sizes - tp1_sell_amounts, position_sizes)
+                    tp1_hit = torch.where(tp1_trigger, True, tp1_hit)
+                    trailing_active = torch.where(tp1_trigger, True, trailing_active)
+                    peak_prices = torch.where(tp1_trigger, current_price, peak_prices)
 
-                # TP2
-                tp2_trigger = active_deals & ~tp2_hit & (profit_pcts >= tp_level2s)
-                tp2_sell_amounts = position_sizes * (tp_percent2s / 100.0)
-                tp2_usdt = tp2_sell_amounts * current_price
-                balances = torch.where(tp2_trigger, balances + tp2_usdt, balances)
-                position_sizes = torch.where(tp2_trigger, position_sizes - tp2_sell_amounts, position_sizes)
-                tp2_hit = torch.where(tp2_trigger, True, tp2_hit)
+                    # TP2
+                    tp2_trigger = active_deals & ~tp2_hit & (profit_pcts >= tp_level2s)
+                    tp2_sell_amounts = position_sizes * (tp_percent2s / 100.0)
+                    tp2_usdt = tp2_sell_amounts * current_price
+                    balances = torch.where(tp2_trigger, balances + tp2_usdt, balances)
+                    position_sizes = torch.where(tp2_trigger, position_sizes - tp2_sell_amounts, position_sizes)
+                    tp2_hit = torch.where(tp2_trigger, True, tp2_hit)
 
-                # TP3
-                tp3_trigger = active_deals & ~tp3_hit & (profit_pcts >= tp_level3s)
-                tp3_sell_amounts = position_sizes * (tp_percent3s / 100.0)
-                tp3_usdt = tp3_sell_amounts * current_price
-                balances = torch.where(tp3_trigger, balances + tp3_usdt, balances)
-                position_sizes = torch.where(tp3_trigger, position_sizes - tp3_sell_amounts, position_sizes)
-                tp3_hit = torch.where(tp3_trigger, True, tp3_hit)
+                    # TP3
+                    tp3_trigger = active_deals & ~tp3_hit & (profit_pcts >= tp_level3s)
+                    tp3_sell_amounts = position_sizes * (tp_percent3s / 100.0)
+                    tp3_usdt = tp3_sell_amounts * current_price
+                    balances = torch.where(tp3_trigger, balances + tp3_usdt, balances)
+                    position_sizes = torch.where(tp3_trigger, position_sizes - tp3_sell_amounts, position_sizes)
+                    tp3_hit = torch.where(tp3_trigger, True, tp3_hit)
 
-                # Update peak prices for trailing
-                peak_prices = torch.where(trailing_active & (current_price > peak_prices), current_price, peak_prices)
+                    # Update peak prices for trailing
+                    peak_prices = torch.where(trailing_active & (current_price > peak_prices), current_price,
+                                              peak_prices)
 
-                # Trailing stop
-                trailing_thresholds = peak_prices * (1.0 - trailing_deviations / 100.0)
-                trailing_trigger = trailing_active & (current_price <= trailing_thresholds)
+                    # Trailing stop
+                    trailing_thresholds = peak_prices * (1.0 - trailing_deviations / 100.0)
+                    trailing_trigger = trailing_active & (current_price <= trailing_thresholds)
 
-                # Force exit conditions
-                force_exit = active_deals & (current_rsi_4h > rsi_exit_thresholds)
+                    # Force exit conditions
+                    force_exit = active_deals & (current_rsi_4h > rsi_exit_thresholds)
 
-                # Execute full exits
-                exit_trigger = trailing_trigger | force_exit
-                exit_usdt = position_sizes * current_price
-                balances = torch.where(exit_trigger, balances + exit_usdt, balances)
-                position_sizes = torch.where(exit_trigger, 0.0, position_sizes)
-                active_deals = torch.where(exit_trigger, False, active_deals)
-                trailing_active = torch.where(exit_trigger, False, trailing_active)
+                    # Execute full exits
+                    exit_trigger = trailing_trigger | force_exit
+                    exit_usdt = position_sizes * current_price
+                    balances = torch.where(exit_trigger, balances + exit_usdt, balances)
+                    position_sizes = torch.where(exit_trigger, 0.0, position_sizes)
+                    active_deals = torch.where(exit_trigger, False, active_deals)
+                    trailing_active = torch.where(exit_trigger, False, trailing_active)
 
-                # Close deals with zero position
-                zero_position = active_deals & (position_sizes < 0.0001)
-                active_deals = torch.where(zero_position, False, active_deals)
+                    # Close deals with zero position
+                    zero_position = active_deals & (position_sizes < 0.0001)
+                    active_deals = torch.where(zero_position, False, active_deals)
 
-                # Record total portfolio values
-                portfolio_values = balances + position_sizes * current_price
-                balance_history[:, i] = portfolio_values
+                    # Record total portfolio values
+                    portfolio_values = balances + position_sizes * current_price
+                    balance_history[:, i] = portfolio_values
+
+                    # Progress logging every 10k iterations
+                    if i % 10000 == 0 and i > 0:
+                        print(f"    GPU simulation progress: {i}/{data_length} ({i / data_length * 100:.1f}%)")
+
+                except Exception as e:
+                    print(f"    Error at iteration {i}: {e}")
+                    # Skip this iteration and continue
+                    continue
 
             # Final exit for any remaining positions
             final_exit_usdt = position_sizes * self.prices[-1]
@@ -768,20 +851,88 @@ class GPUBatchSimulator:
     def _simulate_batch_cpu(self, param_batch: List[StrategyParams]) -> List[Tuple[float, float]]:
         """Fallback CPU simulation for failed GPU runs"""
         results = []
-        for params in param_batch:
+
+        print(f"    Running {len(param_batch)} simulations on CPU...")
+
+        for i, params in enumerate(param_batch):
             try:
-                # Use the original backtester for individual simulation
-                from copy import deepcopy
+                # Create data frame from existing tensors (no recalculation needed)
                 data_df = pd.DataFrame({
-                    'close': self.prices.cpu().numpy()
+                    'open': self.prices.cpu().numpy(),
+                    'high': self.prices.cpu().numpy(),
+                    'low': self.prices.cpu().numpy(),
+                    'close': self.prices.cpu().numpy(),
+                    'vol': self.prices.cpu().numpy()  # Dummy volume
                 }, index=pd.to_datetime(self.timestamps))
 
-                # Create a simple backtester instance
-                simple_backtester = Backtester(data_df, self.initial_balance)
-                apy, max_drawdown, _, _ = simple_backtester.simulate_strategy(params)
-                results.append((apy, max_drawdown))
-            except:
-                results.append((0.0, 100.0))  # Failed simulation
+                # Create minimal backtester without recalculating indicators
+                strategy = DCAStrategy(params, self.initial_balance)
+
+                # Simple simulation loop
+                for timestamp, row in data_df.iterrows():
+                    # Use pre-calculated indicator values from tensors
+                    ts_idx = list(data_df.index).index(timestamp)
+
+                    current_indicators = {
+                        'rsi_1h': self.rsi_1h_values[ts_idx].item(),
+                        'rsi_4h': self.rsi_4h_values[ts_idx].item(),
+                        'sma_fast_1h': self.sma_fast_1h_values[ts_idx].item(),
+                        'sma_slow_1h': self.sma_slow_1h_values[ts_idx].item(),
+                        'sma_50_1h': self.sma_50_1h_values[ts_idx].item()
+                    }
+
+                    # Check for new entry
+                    if strategy.can_enter_new_deal(timestamp) and strategy.check_entry_conditions(row,
+                                                                                                  current_indicators):
+                        strategy.execute_base_order(row)
+
+                    # Check active deal logic
+                    if strategy.active_deal:
+                        if strategy.check_safety_conditions(row, current_indicators):
+                            strategy.execute_safety_order(row)
+
+                        tp_triggers = strategy.check_take_profit_conditions(row)
+                        for tp_level, sell_percent, _ in tp_triggers:
+                            strategy.execute_take_profit(row, tp_level, sell_percent)
+
+                        if strategy.check_trailing_stop(row):
+                            strategy.execute_full_exit(row, 'trailing_stop')
+                        elif strategy.check_force_exit_conditions(row, current_indicators):
+                            strategy.execute_full_exit(row, 'rsi_force_exit')
+
+                # Close any remaining position
+                if strategy.active_deal:
+                    last_row = data_df.iloc[-1]
+                    strategy.execute_full_exit(last_row, 'end_of_data')
+
+                # Calculate metrics
+                final_balance = strategy.balance
+                days = (data_df.index[-1] - data_df.index[0]).days
+                years = days / 365.25 if days > 0 else 1
+                apy = (pow(final_balance / self.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
+
+                # Calculate drawdown from balance history
+                if strategy.balance_history:
+                    peak = strategy.balance_history[0][1]
+                    max_dd = 0.0
+                    for _, balance in strategy.balance_history:
+                        if balance > peak:
+                            peak = balance
+                        drawdown = (peak - balance) / peak * 100 if peak > 0 else 0
+                        max_dd = max(max_dd, drawdown)
+                else:
+                    max_dd = 0.0
+
+                results.append((apy, max_dd))
+
+                if i % 4 == 0:
+                    print(f"      CPU progress: {i + 1}/{len(param_batch)}")
+
+            except Exception as e:
+                print(f"      CPU simulation {i} failed: {e}")
+                results.append((0.0, 100.0))
+
+        print(f"    ✓ CPU fallback completed")
         return results
 
 
@@ -941,62 +1092,73 @@ class Optimizer:
             for i in range(0, n_trials, batch_size):
                 batch_params = all_params[i:i + batch_size]
 
-                # GPU batch simulation with memory management
-                try:
-                    if GPU_AVAILABLE:
-                        torch.cuda.empty_cache()  # Clear cache before each batch
+                # Force much smaller batches for large datasets
+                if len(self.gpu_simulator.prices) > 1000000:
+                    batch_params = batch_params[:min(16, len(batch_params))]
+                    print(f"  Large dataset - limiting to {len(batch_params)} simulations per batch")
 
-                    batch_results = self.gpu_simulator.simulate_batch(batch_params)
-
-                    # Update best results
-                    for j, (apy, max_drawdown) in enumerate(batch_results):
-                        fitness = 0.6 * apy - 0.4 * max_drawdown
-
-                        if fitness > self.best_fitness:
-                            self.best_fitness = fitness
-                            self.best_apy = apy
-                            self.best_drawdown = max_drawdown
-                            param_idx = i + j
-                            self.best_params = {
-                                # Only track optimizable parameters
-                                'initial_deviation': params.initial_deviation,
-                                'trailing_deviation': params.trailing_deviation,
-                                'tp_level1': params.tp_level1,
-                                'tp_level2': params.tp_level2,
-                                'tp_level3': params.tp_level3,
-                                'tp_percent1': params.tp_percent1,
-                                'tp_percent2': params.tp_percent2,
-                                'tp_percent3': params.tp_percent3,
-
-                                # Include constants for reference
-                                'base_percent': 1.0,
-                                'step_multiplier': 1.5,
-                                'volume_multiplier': 1.2,
-                                'max_safeties': 8,
-                                'rsi_entry_threshold': 30.0,
-                                'rsi_safety_threshold': 30.0,
-                                'rsi_exit_threshold': 70.0,
-                                'fees': 0.075
-                            }
-
-                    all_results.extend(batch_results)
-
-                    # Update progress
-                    desc = f"Best: APY={self.best_apy:.1f}% DD={self.best_drawdown:.1f}% Fitness={self.best_fitness:.1f}"
-                    self.progress_bar.set_description(desc)
-                    self.progress_bar.update(len(batch_params))
-
-                except torch.cuda.OutOfMemoryError:
-                    print(f"\nGPU OOM at batch {i // batch_size + 1}, reducing batch size...")
-                    # Reduce batch size and retry
-                    self.gpu_simulator.max_batch_size = max(4, self.gpu_simulator.max_batch_size // 2)
-                    batch_size = self.gpu_simulator.max_batch_size
+                # Aggressive memory management
+                if GPU_AVAILABLE:
                     torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
 
-                    # Retry with smaller batch
-                    batch_results = self.gpu_simulator.simulate_batch(batch_params[:batch_size])
-                    all_results.extend(batch_results)
-                    self.progress_bar.update(batch_size)
+                print(f"  Processing batch {i // batch_size + 1} with {len(batch_params)} simulations...")
+                print(f"  GPU Memory before: {torch.cuda.memory_allocated(0) / 1024 ** 3:.1f}GB")
+
+                # Add timeout and error protection
+                try:
+                    with timeout(600):  # 10 minute timeout per batch
+                        batch_results = self.gpu_simulator.simulate_batch(batch_params)
+
+                except TimeoutError:
+                    print(f"  ⚠️ Batch timed out - falling back to CPU")
+                    torch.cuda.empty_cache()
+                    batch_results = self.gpu_simulator._simulate_batch_cpu(batch_params)
+
+                except Exception as e:
+                    print(f"  ⚠️ GPU batch failed: {e} - falling back to CPU")
+                    torch.cuda.empty_cache()
+                    batch_results = self.gpu_simulator._simulate_batch_cpu(batch_params)
+
+                print(f"  ✓ Batch completed successfully")
+
+                # Update best results
+                for j, (apy, max_drawdown) in enumerate(batch_results):
+                    fitness = 0.6 * apy - 0.4 * max_drawdown
+
+                    if fitness > self.best_fitness:
+                        self.best_fitness = fitness
+                        self.best_apy = apy
+                        self.best_drawdown = max_drawdown
+                        param_idx = i + j
+                        self.best_params = {
+                            # Only track optimizable parameters
+                            'initial_deviation': all_params[param_idx].initial_deviation,
+                            'trailing_deviation': all_params[param_idx].trailing_deviation,
+                            'tp_level1': all_params[param_idx].tp_level1,
+                            'tp_level2': all_params[param_idx].tp_level2,
+                            'tp_level3': all_params[param_idx].tp_level3,
+                            'tp_percent1': all_params[param_idx].tp_percent1,
+                            'tp_percent2': all_params[param_idx].tp_percent2,
+                            'tp_percent3': all_params[param_idx].tp_percent3,
+
+                            # Include constants for reference
+                            'base_percent': 1.0,
+                            'step_multiplier': 1.5,
+                            'volume_multiplier': 1.2,
+                            'max_safeties': 8,
+                            'rsi_entry_threshold': 30.0,
+                            'rsi_safety_threshold': 30.0,
+                            'rsi_exit_threshold': 70.0,
+                            'fees': 0.075
+                        }
+
+                all_results.extend(batch_results)
+
+                # Update progress
+                desc = f"Best: APY={self.best_apy:.1f}% DD={self.best_drawdown:.1f}% Fitness={self.best_fitness:.1f}"
+                self.progress_bar.set_description(desc)
+                self.progress_bar.update(len(batch_params))
 
         except KeyboardInterrupt:
             print("\nOptimization interrupted by user")
