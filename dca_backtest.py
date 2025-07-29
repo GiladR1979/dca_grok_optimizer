@@ -415,20 +415,6 @@ class DataProcessor:
             indicators['sma_fast_1h'] = ta.trend.SMAIndicator(df_1h['close'], window=12).sma_indicator()
             indicators['sma_slow_1h'] = ta.trend.SMAIndicator(df_1h['close'], window=26).sma_indicator()
 
-            # print("  Computing VWAP indicator...")
-            #
-            # # VWAP(14) calculation - Volume Weighted Average Price
-            # def calculate_vwap(df, window=14):
-            #     """Calculate Volume Weighted Average Price"""
-            #     typical_price = (df['high'] + df['low'] + df['close']) / 3
-            #     vwap_numerator = (typical_price * df['vol']).rolling(window=window).sum()
-            #     vwap_denominator = df['vol'].rolling(window=window).sum()
-            #     # Handle division by zero
-            #     vwap = vwap_numerator / vwap_denominator
-            #     return vwap.fillna(df['close'])  # Fallback to close price if no volume
-            #
-            # indicators['vwap_1h'] = calculate_vwap(df_1h, window=14)
-
             # DEBUG: Check for NaN values
             for name, series in indicators.items():
                 nan_count = series.isna().sum()
@@ -449,7 +435,6 @@ class DataProcessor:
             indicators['rsi_4h'] = pd.Series(50, index=df_4h.index)
             indicators['sma_fast_1h'] = df_1h['close'].rolling(12).mean()
             indicators['sma_slow_1h'] = df_1h['close'].rolling(26).mean()
-            indicators['vwap_1h'] = df_1h['close'].rolling(14).mean()  # Simple fallback
 
         return indicators, df_1h, df_4h
 
@@ -525,7 +510,8 @@ class Backtester:
         #     strategy.execute_full_exit(last_row, 'end_of_data')
 
         # Calculate metrics
-        final_balance = strategy.balance
+        # FIXED: Use total portfolio value (including open positions) for APY, not just cash balance
+        final_balance = strategy.balance_history[-1][1] if strategy.balance_history else self.initial_balance
         apy = self.calculate_apy(self.initial_balance, final_balance,
                                  self.data.index[0], self.data.index[-1])
         max_drawdown = self.calculate_max_drawdown(strategy.balance_history)
@@ -638,9 +624,9 @@ class GPUBatchSimulator:
             # Reindex to match our timestamps with forward fill
             aligned_series = temp_series.reindex(timestamps, method='ffill')
 
-            # Fill any remaining NaN values at the beginning with first valid value or 50.0
-            first_valid_value = aligned_series.dropna().iloc[0] if len(aligned_series.dropna()) > 0 else 50.0
-            aligned_series = aligned_series.fillna(first_valid_value)
+            # Fill any remaining NaN values (leading ones) with 50.0
+            # FIXED: Use 50.0 instead of first_valid to match CPU (prevents backfilling leading NaNs with first value)
+            aligned_series = aligned_series.fillna(50.0)
 
             # Convert to tensor
             aligned_values = torch.tensor(aligned_series.values, dtype=torch.float32, device=self.device)
@@ -705,6 +691,9 @@ class GPUBatchSimulator:
             tp2_hit = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
             tp3_hit = torch.zeros(batch_size, dtype=torch.bool, device=self.device)
 
+            # FIXED: Add cooldown tracking (assume 1m data, use step index for minutes)
+            last_close_step = torch.full((batch_size,), -999999, dtype=torch.int64, device=self.device)
+
             # Extract parameters as tensors
             base_percents = torch.tensor([p.base_percent for p in param_batch], dtype=torch.float32, device=self.device)
             initial_deviations = torch.tensor([p.initial_deviation for p in param_batch], dtype=torch.float32,
@@ -730,6 +719,8 @@ class GPUBatchSimulator:
                                                device=self.device)
 
             fees = torch.tensor([p.fees for p in param_batch], dtype=torch.float32, device=self.device)
+            # FIXED: Precompute fee factor for buys/sells
+            fee_factor = 1.0 - (fees / 100.0)
 
             # Track balance history for drawdown calculation
             balance_history = torch.zeros((batch_size, data_length), dtype=torch.float32, device=self.device)
@@ -766,11 +757,15 @@ class GPUBatchSimulator:
                     # Entry conditions - SIMPLIFIED TO 2 CONDITIONS
                     rsi_entry_ok = current_rsi_1h < rsi_entry_thresholds  # RSI < 40 on 1H
                     sma_ok = current_sma_fast > current_sma_slow  # SMA cross bullish
-                    can_enter = ~active_deals & rsi_entry_ok & sma_ok  # REMOVED momentum_ok
+                    # FIXED: Add cooldown check (5 min since last close)
+                    in_cooldown = (i - last_close_step) < 5
+                    can_enter = ~active_deals & rsi_entry_ok & sma_ok & ~in_cooldown  # REMOVED momentum_ok
 
                     # Execute base orders
                     base_amounts = balances * (base_percents / 100.0)
-                    coin_amounts = base_amounts / current_price
+                    # FIXED: Apply fees to base buy
+                    net_base = base_amounts * fee_factor
+                    coin_amounts = net_base / current_price
 
                     # Apply entry logic
                     entering = can_enter & (base_amounts > 1.0)  # Minimum order size
@@ -798,7 +793,9 @@ class GPUBatchSimulator:
                     safety_base = self.initial_balance * (base_percents / 100.0)
                     safety_amounts = safety_base * safety_multipliers
                     safety_amounts = torch.min(safety_amounts, balances * 0.95)  # Don't exceed balance
-                    safety_coins = safety_amounts / current_price
+                    # FIXED: Apply fees to safety buy
+                    net_safety = safety_amounts * fee_factor
+                    safety_coins = net_safety / current_price
 
                     executing_safety = can_safety & (safety_amounts > 1.0)
                     balances = torch.where(executing_safety, balances - safety_amounts, balances)
@@ -814,7 +811,8 @@ class GPUBatchSimulator:
                     # TP1
                     tp1_trigger = active_deals & ~tp1_hit & (profit_pcts >= tp_level1s)
                     tp1_sell_amounts = position_sizes * (tp_percent1s / 100.0)
-                    tp1_usdt = tp1_sell_amounts * current_price
+                    # FIXED: Apply fees to TP sell
+                    tp1_usdt = (tp1_sell_amounts * current_price) * fee_factor
                     balances = torch.where(tp1_trigger, balances + tp1_usdt, balances)
                     position_sizes = torch.where(tp1_trigger, position_sizes - tp1_sell_amounts, position_sizes)
                     tp1_hit = torch.where(tp1_trigger, True, tp1_hit)
@@ -824,7 +822,8 @@ class GPUBatchSimulator:
                     # TP2
                     tp2_trigger = active_deals & ~tp2_hit & (profit_pcts >= tp_level2s)
                     tp2_sell_amounts = position_sizes * (tp_percent2s / 100.0)
-                    tp2_usdt = tp2_sell_amounts * current_price
+                    # FIXED: Apply fees to TP sell
+                    tp2_usdt = (tp2_sell_amounts * current_price) * fee_factor
                     balances = torch.where(tp2_trigger, balances + tp2_usdt, balances)
                     position_sizes = torch.where(tp2_trigger, position_sizes - tp2_sell_amounts, position_sizes)
                     tp2_hit = torch.where(tp2_trigger, True, tp2_hit)
@@ -832,7 +831,8 @@ class GPUBatchSimulator:
                     # TP3
                     tp3_trigger = active_deals & ~tp3_hit & (profit_pcts >= tp_level3s)
                     tp3_sell_amounts = position_sizes * (tp_percent3s / 100.0)
-                    tp3_usdt = tp3_sell_amounts * current_price
+                    # FIXED: Apply fees to TP sell
+                    tp3_usdt = (tp3_sell_amounts * current_price) * fee_factor
                     balances = torch.where(tp3_trigger, balances + tp3_usdt, balances)
                     position_sizes = torch.where(tp3_trigger, position_sizes - tp3_sell_amounts, position_sizes)
                     tp3_hit = torch.where(tp3_trigger, True, tp3_hit)
@@ -842,15 +842,18 @@ class GPUBatchSimulator:
                                               peak_prices)
 
                     # Trailing stop
-                    trailing_thresholds = peak_prices * (1.0 - trailing_deviations / 100.0)
+                    # FIXED: Limit trailing deviation to min(trailing_deviation, tp_level1)
+                    effective_trailing_deviations = torch.minimum(trailing_deviations, tp_level1s)
+                    trailing_thresholds = peak_prices * (1.0 - effective_trailing_deviations / 100.0)
                     trailing_trigger = trailing_active & (current_price <= trailing_thresholds)
 
-                    # Force exit conditions
-                    force_exit = active_deals & (current_rsi_4h > rsi_exit_thresholds)
+                    # FIXED: Remove force_exit (not in CPU code)
+                    # force_exit = active_deals & (current_rsi_4h > rsi_exit_thresholds)
 
                     # Execute full exits
-                    exit_trigger = trailing_trigger | force_exit
-                    exit_usdt = position_sizes * current_price
+                    exit_trigger = trailing_trigger  # FIXED: No | force_exit
+                    # FIXED: Apply fees to full exit sell
+                    exit_usdt = (position_sizes * current_price) * fee_factor
                     balances = torch.where(exit_trigger, balances + exit_usdt, balances)
                     position_sizes = torch.where(exit_trigger, 0.0, position_sizes)
                     active_deals = torch.where(exit_trigger, False, active_deals)
@@ -859,6 +862,10 @@ class GPUBatchSimulator:
                     # Close deals with zero position
                     zero_position = active_deals & (position_sizes < 0.0001)
                     active_deals = torch.where(zero_position, False, active_deals)
+
+                    # FIXED: Update last_close_step on any close event
+                    close_events = exit_trigger | zero_position
+                    last_close_step = torch.where(close_events, torch.full_like(last_close_step, i), last_close_step)
 
                     # Record total portfolio values
                     portfolio_values = balances + position_sizes * current_price
@@ -873,8 +880,8 @@ class GPUBatchSimulator:
                     # Skip this iteration and continue
                     continue
 
-            # Final exit for any remaining positions
-            final_exit_usdt = position_sizes * self.prices[-1]
+            # Final valuation for any remaining positions (no sell/fee, just market value)
+            final_exit_usdt = position_sizes * self.prices[-1]  # FIXED: No fee here (matches CPU)
             final_balances = balances + final_exit_usdt
 
             # Calculate metrics
@@ -941,7 +948,6 @@ class GPUBatchSimulator:
                         'rsi_4h': self.rsi_4h_values[ts_idx].item(),
                         'sma_fast_1h': self.sma_fast_1h_values[ts_idx].item(),
                         'sma_slow_1h': self.sma_slow_1h_values[ts_idx].item(),
-                        'sma_50_1h': self.sma_50_1h_values[ts_idx].item()
                     }
 
                     # Check for new entry
@@ -960,8 +966,6 @@ class GPUBatchSimulator:
 
                         if strategy.check_trailing_stop(row):
                             strategy.execute_full_exit(row, 'trailing_stop')
-                        elif strategy.check_force_exit_conditions(row, current_indicators):
-                            strategy.execute_full_exit(row, 'rsi_force_exit')
 
                 # Close any remaining position
                 if strategy.active_deal:
