@@ -518,7 +518,6 @@ class GPUBatchSimulator:
         self.timestamps = data.index.values
 
         print("  Preparing indicator tensors with forward fill...")
-        # Prepare indicator tensors (with forward fill)
         self.rsi_1h_values = self._prepare_indicator_tensor(data.index, indicators.get('rsi_1h', pd.Series()))
         print("    ✓ RSI 1H tensor ready")
         self.rsi_4h_values = self._prepare_indicator_tensor(data.index, indicators.get('rsi_4h', pd.Series()))
@@ -1105,18 +1104,11 @@ class Optimizer:
                 print(f"  Processing batch {i // batch_size + 1} with {len(batch_params)} simulations...")
                 print(f"  GPU Memory before: {torch.cuda.memory_allocated(0) / 1024 ** 3:.1f}GB")
 
-                # Add timeout and error protection
+                # Add error protection (no timeout, as it doesn't interrupt properly)
                 try:
-                    with timeout(600):  # 10 minute timeout per batch
-                        batch_results = self.gpu_simulator.simulate_batch(batch_params)
-
-                except TimeoutError:
-                    print(f"  ⚠️ Batch timed out - falling back to CPU")
-                    torch.cuda.empty_cache()
-                    batch_results = self.gpu_simulator._simulate_batch_cpu(batch_params)
-
+                    batch_results = self.gpu_simulator.simulate_batch(batch_params)
                 except Exception as e:
-                    print(f"  ⚠️ GPU batch failed: {e} - falling back to CPU")
+                    print(f"  ⚠️ Batch failed: {e} - falling back to CPU")
                     torch.cuda.empty_cache()
                     batch_results = self.gpu_simulator._simulate_batch_cpu(batch_params)
 
