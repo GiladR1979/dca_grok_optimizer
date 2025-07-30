@@ -51,36 +51,8 @@ except ImportError:
     print("PyTorch not available - using CPU only mode")
 
 
-@dataclass
-class StrategyParams:
-    """Strategy parameters for optimization"""
-    base_percent: float = 1.0
-    initial_deviation: float = 3.0
-    step_multiplier: float = 1.5
-    volume_multiplier: float = 1.2
-    max_safeties: int = 8
-    trailing_deviation: float = 3.0
-    tp_level1: float = 3.0
-    tp_percent1: float = 50.0
-    tp_percent2: float = 30.0
-    tp_percent3: float = 20.0
-    rsi_entry_threshold: float = 40.0
-    rsi_safety_threshold: float = 30.0
-    rsi_exit_threshold: float = 70.0
-    fees: float = 0.075
-
-    def __post_init__(self):
-        """Ensure trailing deviation doesn't exceed TP1"""
-        if self.trailing_deviation > self.tp_level1:
-            self.trailing_deviation = self.tp_level1
-
-    @property
-    def tp_level2(self) -> float:
-        return self.tp_level1 * 2
-
-    @property
-    def tp_level3(self) -> float:
-        return self.tp_level1 * 3
+# Import centralized strategy configuration
+from strategy_config import StrategyParams, OptimizationConfig, StrategyPresets
 
 
 class FastDataProcessor:
@@ -480,38 +452,19 @@ class FastBacktester:
 class FastOptimizer:
     """High-performance optimizer with parallel processing"""
     
-    def __init__(self, backtester: FastBacktester):
+    def __init__(self, backtester: FastBacktester, optimization_config: OptimizationConfig = None):
         self.backtester = backtester
         self.best_fitness = -1000
         self.best_apy = 0
         self.best_drawdown = 100
         self.best_params = {}
         self.trial_count = 0
+        # Use centralized optimization configuration
+        self.optimization_config = optimization_config or OptimizationConfig()
     
     def _suggest_params(self, trial):
-        """Suggest parameters using Optuna trial"""
-        tp_level1 = trial.suggest_categorical('tp_level1', [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])
-        trailing_deviation = trial.suggest_categorical('trailing_deviation', [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])
-        
-        return StrategyParams(
-            # Constants
-            base_percent=1.0,
-            step_multiplier=1.5,
-            volume_multiplier=1.2,
-            max_safeties=8,
-            rsi_entry_threshold=40.0,
-            rsi_safety_threshold=30.0,
-            rsi_exit_threshold=70.0,
-            fees=0.075,
-            
-            # Optimizable
-            initial_deviation=trial.suggest_categorical('initial_deviation', [2.0, 2.5, 3.0, 3.5, 4.0]),
-            trailing_deviation=trailing_deviation,
-            tp_level1=tp_level1,
-            tp_percent1=trial.suggest_categorical('tp_percent1', [40.0, 45.0, 50.0, 55.0, 60.0]),
-            tp_percent2=trial.suggest_categorical('tp_percent2', [25.0, 30.0, 35.0]),
-            tp_percent3=trial.suggest_categorical('tp_percent3', [15.0, 20.0, 25.0])
-        )
+        """Suggest parameters using centralized configuration"""
+        return self.optimization_config.suggest_params(trial)
     
     def objective(self, trial):
         """Fast objective function"""
@@ -717,6 +670,10 @@ def main():
     parser.add_argument('--trials', type=int, default=500, help='Number of trials')
     parser.add_argument('--sample_days', type=int, default=0, help='Sample N days for faster testing (0=all data)')
     parser.add_argument('--output_dir', default='./results')
+    parser.add_argument('--market_type', choices=['bull', 'bear', 'sideways', 'default'], default='default', 
+                       help='Market type for optimization ranges')
+    parser.add_argument('--preset', choices=['conservative', 'aggressive', 'bull_market', 'bear_market', 'scalping'], 
+                       help='Use preset strategy parameters')
     
     args = parser.parse_args()
     
@@ -740,18 +697,47 @@ def main():
     # Initialize fast backtester
     backtester = FastBacktester(data, args.initial_balance)
     
-    if args.optimize:
-        optimizer = FastOptimizer(backtester)
-        best_params = optimizer.optimize_fast(args.trials)
-        # Convert to StrategyParams object (filter out extra keys)
-        param_keys = {
-            'initial_deviation', 'trailing_deviation', 'tp_level1', 
-            'tp_percent1', 'tp_percent2', 'tp_percent3'
+    # Choose strategy parameters
+    if args.preset:
+        # Use preset strategy
+        preset_map = {
+            'conservative': StrategyPresets.conservative,
+            'aggressive': StrategyPresets.aggressive,
+            'bull_market': StrategyPresets.bull_market,
+            'bear_market': StrategyPresets.bear_market,
+            'scalping': StrategyPresets.scalping
         }
-        filtered_params = {k: v for k, v in best_params.items() if k in param_keys}
-        strategy_params = StrategyParams(**filtered_params)
+        strategy_params = preset_map[args.preset]()
+        print(f"Using {args.preset} preset strategy")
+        
+    elif args.optimize:
+        # Choose optimization ranges based on market type
+        from strategy_config import MarketOptimizationRanges
+        
+        if args.market_type == 'bull':
+            optimization_config = OptimizationConfig(MarketOptimizationRanges.bull_market())
+            print("Optimizing for BULL market conditions")
+        elif args.market_type == 'bear':
+            optimization_config = OptimizationConfig(MarketOptimizationRanges.bear_market())
+            print("Optimizing for BEAR market conditions")
+        elif args.market_type == 'sideways':
+            optimization_config = OptimizationConfig(MarketOptimizationRanges.sideways_market())
+            print("Optimizing for SIDEWAYS market conditions")
+        else:
+            optimization_config = OptimizationConfig()
+            print("Using DEFAULT optimization ranges")
+        
+        optimizer = FastOptimizer(backtester, optimization_config)
+        best_params = optimizer.optimize_fast(args.trials)
+        
+        # Create StrategyParams from best results (filter out extra keys like 'num_trades')
+        valid_keys = {'base_percent', 'initial_deviation', 'step_multiplier', 'volume_multiplier',
+                     'max_safeties', 'trailing_deviation', 'tp_level1', 'tp_percent1', 'tp_percent2',
+                     'tp_percent3', 'rsi_entry_threshold', 'rsi_safety_threshold', 'rsi_exit_threshold', 'fees'}
+        strategy_params = StrategyParams(**{k: v for k, v in best_params.items() if k in valid_keys})
     else:
         strategy_params = StrategyParams()
+        print("Using default strategy parameters")
     
     # Final simulation with trades for visualization
     apy, max_drawdown, balance_history, trades = Visualizer.simulate_with_trades(backtester, strategy_params)
