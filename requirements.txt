@@ -1,0 +1,8 @@
+pandas>=2.0.0
+numpy>=1.21.0
+matplotlib>=3.5.0
+ta>=0.10.0
+optuna>=3.0.0
+tqdm>=4.60.0
+# PyTorch - install manually if GPU acceleration needed
+# torch>=1.12.0
