@@ -323,77 +323,112 @@ def simulate_with_actual_trades(backtester, params: StrategyParams):
     """Run CPU simulation with actual trade tracking for accurate visualization"""
     try:
         from dca_backtest import DCAStrategy
-    except:
+        
+        # Create a new params object with the exact same values to ensure proper initialization
+        # This ensures all parameters are properly passed, including those from optimization
+        strategy_params = StrategyParams(
+            base_percent=params.base_percent,
+            initial_deviation=params.initial_deviation,
+            step_multiplier=params.step_multiplier,
+            volume_multiplier=params.volume_multiplier,
+            max_safeties=params.max_safeties,
+            trailing_deviation=params.trailing_deviation,
+            tp_level1=params.tp_level1,
+            tp_percent1=params.tp_percent1,
+            tp_percent2=params.tp_percent2,
+            tp_percent3=params.tp_percent3,
+            rsi_entry_threshold=params.rsi_entry_threshold,
+            rsi_safety_threshold=params.rsi_safety_threshold,
+            rsi_exit_threshold=params.rsi_exit_threshold,
+            fees=params.fees
+        )
+        
+        # Use the original strategy class for accurate trade tracking
+        strategy = DCAStrategy(strategy_params, backtester.initial_balance)
+        
+        # Get indicators at each timestamp (simplified)
+        trades = []
+        balance_history = []
+        
+        # Sample data for performance (take every Nth point)
+        n_total = len(backtester.data)
+        sample_rate = max(1, n_total // 50000)  # Limit to ~50k points for performance
+        
+        for i in range(0, n_total, sample_rate):
+            timestamp = backtester.timestamps[i]
+            current_price = backtester.prices[i]
+            
+            # Convert numpy datetime64 to pandas Timestamp for compatibility
+            if hasattr(timestamp, 'to_pydatetime'):
+                timestamp_dt = timestamp
+            else:
+                timestamp_dt = pd.to_datetime(timestamp)
+            
+            # Get current indicators
+            current_indicators = {
+                'rsi_1h': backtester.indicators['rsi_1h'][i],
+                'rsi_4h': backtester.indicators['rsi_4h'][i],
+                'sma_fast_1h': backtester.indicators['sma_fast_1h'][i],
+                'sma_slow_1h': backtester.indicators['sma_slow_1h'][i],
+            }
+            
+            # Create a row-like object for compatibility
+            class Row:
+                def __init__(self, price, timestamp):
+                    self.close = price
+                    self.name = timestamp
+                    # Add dictionary-style access for compatibility
+                    self._data = {'close': price}
+                
+                def __getitem__(self, key):
+                    return self._data.get(key, self.close)
+            
+            row = Row(current_price, timestamp_dt)
+            
+            # Check for new entry
+            if strategy.can_enter_new_deal(timestamp_dt) and strategy.check_entry_conditions(row, current_indicators):
+                strategy.execute_base_order(row)
+            
+            # Check active deal logic
+            if strategy.active_deal:
+                if strategy.check_safety_conditions(row, current_indicators):
+                    strategy.execute_safety_order(row)
+                
+                tp_triggers = strategy.check_take_profit_conditions(row)
+                for tp_level, sell_percent, _ in tp_triggers:
+                    strategy.execute_take_profit(row, tp_level, sell_percent)
+                
+                if strategy.check_trailing_stop(row):
+                    strategy.execute_full_exit(row, 'trailing_stop')
+            
+            # Record portfolio value
+            total_value = strategy.balance + strategy.position_size * current_price
+            balance_history.append((timestamp_dt, total_value))
+        
+        # Calculate final metrics
+        final_balance = balance_history[-1][1] if balance_history else backtester.initial_balance
+        days = (backtester.timestamps[-1] - backtester.timestamps[0]) / np.timedelta64(1, 'D')
+        years = days / 365.25
+        apy = (pow(final_balance / backtester.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
+        
+        # Calculate max drawdown
+        max_dd = 0.0
+        peak = balance_history[0][1] if balance_history else backtester.initial_balance
+        for _, balance in balance_history:
+            if balance > peak:
+                peak = balance
+            drawdown = (peak - balance) / peak * 100
+            max_dd = max(max_dd, drawdown)
+        
+        return apy, max_dd, balance_history, strategy.trades
+        
+    except ImportError as e:
         # If original DCAStrategy not available, raise ImportError to trigger fallback
-        raise ImportError("Original DCAStrategy not available")
-    
-    # Use the original strategy class for accurate trade tracking
-    strategy = DCAStrategy(params, backtester.initial_balance)
-    
-    # Get indicators at each timestamp (simplified)
-    trades = []
-    balance_history = []
-    
-    # Sample data for performance (take every Nth point)
-    n_total = len(backtester.data)
-    sample_rate = max(1, n_total // 50000)  # Limit to ~50k points for performance
-    
-    for i in range(0, n_total, sample_rate):
-        timestamp = backtester.timestamps[i]
-        current_price = backtester.prices[i]
-        
-        # Get current indicators
-        current_indicators = {
-            'rsi_1h': backtester.indicators['rsi_1h'][i],
-            'rsi_4h': backtester.indicators['rsi_4h'][i],
-            'sma_fast_1h': backtester.indicators['sma_fast_1h'][i],
-            'sma_slow_1h': backtester.indicators['sma_slow_1h'][i],
-        }
-        
-        # Create a row-like object for compatibility
-        class Row:
-            def __init__(self, price, timestamp):
-                self.close = price
-                self.name = timestamp
-        
-        row = Row(current_price, timestamp)
-        
-        # Check for new entry
-        if strategy.can_enter_new_deal(timestamp) and strategy.check_entry_conditions(row, current_indicators):
-            strategy.execute_base_order(row)
-        
-        # Check active deal logic
-        if strategy.active_deal:
-            if strategy.check_safety_conditions(row, current_indicators):
-                strategy.execute_safety_order(row)
-            
-            tp_triggers = strategy.check_take_profit_conditions(row)
-            for tp_level, sell_percent, _ in tp_triggers:
-                strategy.execute_take_profit(row, tp_level, sell_percent)
-            
-            if strategy.check_trailing_stop(row):
-                strategy.execute_full_exit(row, 'trailing_stop')
-        
-        # Record portfolio value
-        total_value = strategy.balance + strategy.position_size * current_price
-        balance_history.append((timestamp, total_value))
-    
-    # Calculate final metrics
-    final_balance = balance_history[-1][1] if balance_history else backtester.initial_balance
-    days = (backtester.timestamps[-1] - backtester.timestamps[0]) / np.timedelta64(1, 'D')
-    years = days / 365.25
-    apy = (pow(final_balance / backtester.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
-    
-    # Calculate max drawdown
-    max_dd = 0.0
-    peak = balance_history[0][1] if balance_history else backtester.initial_balance
-    for _, balance in balance_history:
-        if balance > peak:
-            peak = balance
-        drawdown = (peak - balance) / peak * 100
-        max_dd = max(max_dd, drawdown)
-    
-    return apy, max_dd, balance_history, strategy.trades
+        raise ImportError(f"Original DCAStrategy not available: {e}")
+    except Exception as e:
+        # For any other errors, also trigger the fallback
+        print(f"Error in simulate_with_actual_trades: {e}")
+        raise ImportError(f"Failed to run DCAStrategy simulation: {e}")
 
 
 class FastBacktester:
@@ -481,17 +516,9 @@ class FastOptimizer:
                 self.best_fitness = fitness
                 self.best_apy = apy
                 self.best_drawdown = max_drawdown
-                self.best_params = {
-                    'initial_deviation': params.initial_deviation,
-                    'trailing_deviation': params.trailing_deviation,
-                    'tp_level1': params.tp_level1,
-                    'tp_level2': params.tp_level2,
-                    'tp_level3': params.tp_level3,
-                    'tp_percent1': params.tp_percent1,
-                    'tp_percent2': params.tp_percent2,
-                    'tp_percent3': params.tp_percent3,
-                    'num_trades': num_trades
-                }
+                # Store the complete params object
+                self.best_params = params
+                self.best_num_trades = num_trades
             
             return fitness
             
@@ -573,35 +600,72 @@ class Visualizer:
     @staticmethod
     def plot_results(balance_history: List[Tuple[datetime, float]], 
                      trades: List[Trade], coin: str, save_path: str):
-        """Create balance and trades visualization"""
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
+        """Create balance and trades visualization - optimized for large datasets"""
+        print(f"Creating chart with {len(balance_history)} data points and {len(trades)} trades...")
+        
+        # Downsample balance history for large datasets to prevent memory issues
+        max_points = 10000
+        if len(balance_history) > max_points:
+            sample_rate = len(balance_history) // max_points
+            balance_history = balance_history[::sample_rate]
+            print(f"Downsampled to {len(balance_history)} points for visualization")
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))  # Reduced figure size
         
         # Balance chart
         times, balances = zip(*balance_history)
-        ax1.plot(times, balances, 'b-', linewidth=2, label='Portfolio Value')
+        ax1.plot(times, balances, 'b-', linewidth=1.5, label='Portfolio Value')
+        
+        # Limit trade markers to prevent overcrowding
+        max_trade_markers = 500
+        if len(trades) > max_trade_markers:
+            # Sample trades evenly
+            trade_indices = np.linspace(0, len(trades)-1, max_trade_markers, dtype=int)
+            sampled_trades = [trades[i] for i in trade_indices]
+            print(f"Showing {len(sampled_trades)} trade markers (sampled from {len(trades)} total)")
+        else:
+            sampled_trades = trades
         
         # Add trade markers
-        buy_times = [t.timestamp for t in trades if t.action == 'buy']
+        buy_times = []
         buy_balances = []
-        sell_times = [t.timestamp for t in trades if t.action == 'sell']
+        sell_times = []
         sell_balances = []
         
-        for trade in trades:
-            # Find corresponding balance
-            balance_idx = next((i for i, (t, _) in enumerate(balance_history)
-                               if t >= trade.timestamp), -1)
-            if balance_idx >= 0:
-                if trade.action == 'buy':
-                    buy_balances.append(balance_history[balance_idx][1])
-                else:
-                    sell_balances.append(balance_history[balance_idx][1])
+        # Convert balance_history to dict for faster lookup
+        time_to_balance = {t: b for t, b in balance_history}
+        sorted_times = sorted(time_to_balance.keys())
         
-        if buy_times and buy_balances:
+        for trade in sampled_trades:
+            # Find closest time in balance history
+            trade_time = trade.timestamp
+            if hasattr(trade_time, 'to_pydatetime'):
+                trade_time = trade_time.to_pydatetime()
+            elif not isinstance(trade_time, datetime):
+                trade_time = pd.to_datetime(trade_time).to_pydatetime()
+            
+            # Binary search for closest time
+            idx = np.searchsorted([t.timestamp() if hasattr(t, 'timestamp') else pd.to_datetime(t).timestamp() 
+                                  for t in sorted_times], 
+                                 trade_time.timestamp() if hasattr(trade_time, 'timestamp') else pd.to_datetime(trade_time).timestamp())
+            
+            if idx < len(sorted_times):
+                closest_time = sorted_times[min(idx, len(sorted_times)-1)]
+                balance = time_to_balance[closest_time]
+                
+                if trade.action == 'buy':
+                    buy_times.append(trade_time)
+                    buy_balances.append(balance)
+                else:
+                    sell_times.append(trade_time)
+                    sell_balances.append(balance)
+        
+        if buy_times:
             ax1.scatter(buy_times, buy_balances, color='green', marker='^',
-                       s=50, alpha=0.7, label='Buys')
-        if sell_times and sell_balances:
+                       s=30, alpha=0.6, label=f'Buys ({len(buy_times)})')
+        if sell_times:
             ax1.scatter(sell_times, sell_balances, color='red', marker='v',
-                       s=50, alpha=0.7, label='Sells')
+                       s=30, alpha=0.6, label=f'Sells ({len(sell_times)})')
         
         ax1.set_title(f'{coin} - Portfolio Value Over Time')
         ax1.set_xlabel('Date')
@@ -609,32 +673,53 @@ class Visualizer:
         ax1.legend()
         ax1.grid(True, alpha=0.3)
         
-        # Format x-axis
-        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-        ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+        # Format x-axis - use fewer ticks for performance
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
         plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
         
-        # Trade count over time
-        daily_trades = {}
-        for trade in trades:
-            # Handle both pandas Timestamp and numpy datetime64 objects
-            if hasattr(trade.timestamp, 'date'):
-                date = trade.timestamp.date()
-            else:
-                date = pd.to_datetime(trade.timestamp).date()
-            daily_trades[date] = daily_trades.get(date, 0) + 1
+        # Trade count over time - aggregate by week for large datasets
+        if len(trades) > 1000:
+            # Weekly aggregation
+            weekly_trades = {}
+            for trade in trades:
+                if hasattr(trade.timestamp, 'date'):
+                    date = trade.timestamp.date()
+                else:
+                    date = pd.to_datetime(trade.timestamp).date()
+                week_start = date - timedelta(days=date.weekday())
+                weekly_trades[week_start] = weekly_trades.get(week_start, 0) + 1
+            
+            if weekly_trades:
+                dates, counts = zip(*sorted(weekly_trades.items()))
+                ax2.bar(dates, counts, alpha=0.7, color='orange', width=6)
+                ax2.set_title('Weekly Trade Count')
+        else:
+            # Daily aggregation for smaller datasets
+            daily_trades = {}
+            for trade in trades:
+                if hasattr(trade.timestamp, 'date'):
+                    date = trade.timestamp.date()
+                else:
+                    date = pd.to_datetime(trade.timestamp).date()
+                daily_trades[date] = daily_trades.get(date, 0) + 1
+            
+            if daily_trades:
+                dates, counts = zip(*sorted(daily_trades.items()))
+                ax2.bar(dates, counts, alpha=0.7, color='orange')
+                ax2.set_title('Daily Trade Count')
         
-        if daily_trades:
-            dates, counts = zip(*sorted(daily_trades.items()))
-            ax2.bar(dates, counts, alpha=0.7, color='orange')
-            ax2.set_title('Daily Trade Count')
-            ax2.set_xlabel('Date')
-            ax2.set_ylabel('Number of Trades')
-            ax2.grid(True, alpha=0.3)
+        ax2.set_xlabel('Date')
+        ax2.set_ylabel('Number of Trades')
+        ax2.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+        # Save with lower DPI for faster generation
+        print("Saving chart...")
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
         plt.close()
+        print(f"Chart saved to: {save_path}")
     
     @staticmethod
     def save_trades_log(trades: List[Trade], save_path: str):
@@ -730,11 +815,8 @@ def main():
         optimizer = FastOptimizer(backtester, optimization_config)
         best_params = optimizer.optimize_fast(args.trials)
         
-        # Create StrategyParams from best results (filter out extra keys like 'num_trades')
-        valid_keys = {'base_percent', 'initial_deviation', 'step_multiplier', 'volume_multiplier',
-                     'max_safeties', 'trailing_deviation', 'tp_level1', 'tp_percent1', 'tp_percent2',
-                     'tp_percent3', 'rsi_entry_threshold', 'rsi_safety_threshold', 'rsi_exit_threshold', 'fees'}
-        strategy_params = StrategyParams(**{k: v for k, v in best_params.items() if k in valid_keys})
+        # best_params is already a StrategyParams object
+        strategy_params = best_params
     else:
         strategy_params = StrategyParams()
         print("Using default strategy parameters")
