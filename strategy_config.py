@@ -62,13 +62,13 @@ class OptimizationRanges:
     def __post_init__(self):
         """Set default ranges if not provided"""
         if self.base_percent is None:
-            self.base_percent = [1.0]
+            self.base_percent = [1.0, 1.5, 2.0, 2.5, 3.0]
 
         if self.volume_multiplier is None:
             self.volume_multiplier = [1.5]
 
         if self.initial_deviation is None:
-            self.initial_deviation = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+            self.initial_deviation = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
 
         if self.step_multiplier is None:
             self.step_multiplier = [1.2, 1.3, 1.4, 1.5]
@@ -77,7 +77,7 @@ class OptimizationRanges:
             self.max_safeties = [8]
 
         if self.tp_level1 is None:
-            self.tp_level1 = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 10.0]
+            self.tp_level1 = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 10.0]
 
         if self.tp_percent1 is None:
             self.tp_percent1 = [50]
@@ -89,7 +89,7 @@ class OptimizationRanges:
             self.tp_percent3 = [20]
 
         if self.trailing_deviation is None:
-            self.trailing_deviation = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+            self.trailing_deviation = [0.1, 0.2, 0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
 
         if self.rsi_entry_threshold is None:
             self.rsi_entry_threshold = [30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0]
