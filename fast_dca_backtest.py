@@ -94,12 +94,52 @@ class FastDataProcessor:
         sma_fast_1h = ta.trend.SMAIndicator(df_1h['close'], window=12).sma_indicator()
         sma_slow_1h = ta.trend.SMAIndicator(df_1h['close'], window=26).sma_indicator()
         
+        # Additional indicators for 3commas conditional filters
+        # Trend filters
+        sma_50_1h = ta.trend.SMAIndicator(df_1h['close'], window=50).sma_indicator()
+        sma_100_1h = ta.trend.SMAIndicator(df_1h['close'], window=100).sma_indicator()
+        sma_200_1h = ta.trend.SMAIndicator(df_1h['close'], window=200).sma_indicator()
+        ema_21_1h = ta.trend.EMAIndicator(df_1h['close'], window=21).ema_indicator()
+        ema_50_1h = ta.trend.EMAIndicator(df_1h['close'], window=50).ema_indicator()
+        ema_100_1h = ta.trend.EMAIndicator(df_1h['close'], window=100).ema_indicator()
+        
+        # Volatility filters
+        atr_14_1h = ta.volatility.AverageTrueRange(df_1h['high'], df_1h['low'], df_1h['close'], window=14).average_true_range()
+        atr_21_1h = ta.volatility.AverageTrueRange(df_1h['high'], df_1h['low'], df_1h['close'], window=21).average_true_range()
+        atr_28_1h = ta.volatility.AverageTrueRange(df_1h['high'], df_1h['low'], df_1h['close'], window=28).average_true_range()
+        
+        # Volume indicators (using standard SMA on volume)
+        vol_sma_10_1h = ta.trend.SMAIndicator(df_1h['vol'], window=10).sma_indicator()
+        vol_sma_20_1h = ta.trend.SMAIndicator(df_1h['vol'], window=20).sma_indicator()
+        vol_sma_30_1h = ta.trend.SMAIndicator(df_1h['vol'], window=30).sma_indicator()
+        
         # Forward-fill to original timeframe using pandas reindex
         indicators = {
             'rsi_1h': rsi_1h.reindex(df.index, method='ffill').fillna(50.0).values,
             'rsi_4h': rsi_4h.reindex(df.index, method='ffill').fillna(50.0).values,
             'sma_fast_1h': sma_fast_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
-            'sma_slow_1h': sma_slow_1h.reindex(df.index, method='ffill').fillna(method='ffill').values
+            'sma_slow_1h': sma_slow_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            
+            # Trend indicators
+            'sma_50': sma_50_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'sma_100': sma_100_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'sma_200': sma_200_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'ema_21': ema_21_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'ema_50': ema_50_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'ema_100': ema_100_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            
+            # Volatility indicators
+            'atr_14': atr_14_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'atr_21': atr_21_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'atr_28': atr_28_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            
+            # Volume indicators
+            'vol_sma_10': vol_sma_10_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'vol_sma_20': vol_sma_20_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'vol_sma_30': vol_sma_30_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
+            
+            # Volume data
+            'volume': df['vol'].values
         }
         
         # Cache the results
@@ -109,7 +149,327 @@ class FastDataProcessor:
     # Removed _fast_forward_fill - using pandas reindex instead
 
 
-# Keep the fast numba version for optimization
+# Enhanced simulation with 3commas conditional filters
+@njit
+def enhanced_simulate_strategy(
+    prices: np.ndarray,
+    rsi_1h: np.ndarray,
+    rsi_4h: np.ndarray, 
+    sma_fast: np.ndarray,
+    sma_slow: np.ndarray,
+    # Additional indicators for 3commas filters
+    sma_50: np.ndarray,
+    sma_100: np.ndarray,
+    sma_200: np.ndarray,
+    ema_21: np.ndarray,
+    ema_50: np.ndarray,
+    ema_100: np.ndarray,
+    atr_14: np.ndarray,
+    atr_21: np.ndarray,
+    atr_28: np.ndarray,
+    volume: np.ndarray,
+    vol_sma_10: np.ndarray,
+    vol_sma_20: np.ndarray,
+    vol_sma_30: np.ndarray,
+    params_array: np.ndarray,
+    initial_balance: float = 10000.0
+) -> Tuple[float, float, int, np.ndarray, float]:
+    """
+    Enhanced numba-optimized DCA simulation with 3commas conditional filters
+    Returns: (final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration)
+    """
+    
+    # Unpack basic parameters
+    base_percent = params_array[0]
+    initial_deviation = params_array[1] 
+    trailing_deviation = params_array[2]
+    tp_level1 = params_array[3]
+    tp_percent1 = params_array[4] / 100.0
+    tp_percent2 = params_array[5] / 100.0
+    tp_percent3 = params_array[6] / 100.0
+    rsi_entry_thresh = params_array[7]
+    rsi_safety_thresh = params_array[8]
+    fees = params_array[9] / 100.0
+    
+    # Unpack 3commas conditional parameters
+    sma_trend_filter = bool(params_array[10])
+    sma_trend_period = int(params_array[11])  # 50, 100, or 200
+    ema_trend_filter = bool(params_array[12])
+    ema_trend_period = int(params_array[13])  # 21, 50, or 100
+    atr_volatility_filter = bool(params_array[14])
+    atr_period = int(params_array[15])  # 14, 21, or 28
+    atr_multiplier = params_array[16]
+    higher_highs_filter = bool(params_array[17])
+    higher_highs_period = int(params_array[18])  # 10, 20, or 30
+    volume_confirmation = bool(params_array[19])
+    volume_sma_period = int(params_array[20])  # 10, 20, or 30
+    
+    # Constants (matching original)
+    step_multiplier = 1.5
+    volume_multiplier = 1.2
+    max_safeties = 8
+    tp_level2 = tp_level1 * 2
+    tp_level3 = tp_level1 * 3
+    
+    # State variables (matching original DCAStrategy)
+    balance = initial_balance
+    position_size = 0.0
+    average_entry = 0.0
+    total_spent = 0.0
+    active_deal = False
+    safety_count = 0
+    last_entry_price = 0.0
+    peak_price = 0.0
+    trailing_active = False
+    last_close_step = -999999
+    num_trades = 0
+    
+    # TP level tracking
+    tp1_hit = False
+    tp2_hit = False  
+    tp3_hit = False
+    
+    # Balance history for portfolio tracking
+    n_points = len(prices)
+    balance_history = np.zeros(n_points)
+    
+    # Drawdown tracking with duration
+    max_portfolio_value = initial_balance
+    max_drawdown = 0.0
+    current_drawdown_start = -1
+    total_drawdown_duration = 0.0
+    drawdown_count = 0
+    
+    for i in range(n_points):
+        current_price = prices[i]
+        current_rsi_1h = rsi_1h[i] if i < len(rsi_1h) else 50.0
+        current_sma_fast = sma_fast[i] if i < len(sma_fast) else current_price
+        current_sma_slow = sma_slow[i] if i < len(sma_slow) else current_price
+        
+        # 1. CHECK FOR NEW DEAL ENTRY (only if no active deal)
+        if not active_deal:
+            # Basic conditions
+            rsi_entry_ok = current_rsi_1h < rsi_entry_thresh
+            sma_ok = current_sma_fast > current_sma_slow
+            cooldown_ok = (i - last_close_step) >= 5
+            
+            # 3commas conditional filters to avoid massive drawdowns
+            trend_filter_ok = True
+            volatility_filter_ok = True
+            structure_filter_ok = True
+            volume_filter_ok = True
+            
+            # SMA trend filter
+            if sma_trend_filter:
+                if sma_trend_period == 50:
+                    trend_filter_ok = current_price > sma_50[i] if i < len(sma_50) else True
+                elif sma_trend_period == 100:
+                    trend_filter_ok = current_price > sma_100[i] if i < len(sma_100) else True
+                elif sma_trend_period == 200:
+                    trend_filter_ok = current_price > sma_200[i] if i < len(sma_200) else True
+            
+            # EMA trend filter
+            if ema_trend_filter:
+                if ema_trend_period == 21:
+                    trend_filter_ok = trend_filter_ok and (current_price > ema_21[i] if i < len(ema_21) else True)
+                elif ema_trend_period == 50:
+                    trend_filter_ok = trend_filter_ok and (current_price > ema_50[i] if i < len(ema_50) else True)
+                elif ema_trend_period == 100:
+                    trend_filter_ok = trend_filter_ok and (current_price > ema_100[i] if i < len(ema_100) else True)
+            
+            # ATR volatility filter (avoid entering during extreme volatility)
+            if atr_volatility_filter and i > 0:
+                if atr_period == 14:
+                    current_atr = atr_14[i] if i < len(atr_14) else 0.0
+                elif atr_period == 21:
+                    current_atr = atr_21[i] if i < len(atr_21) else 0.0
+                else:  # 28
+                    current_atr = atr_28[i] if i < len(atr_28) else 0.0
+                
+                # Don't enter if recent price movement exceeds ATR threshold
+                price_change = abs(current_price - prices[i-1])
+                volatility_filter_ok = price_change < (current_atr * atr_multiplier)
+            
+            # Higher highs filter (market structure)
+            if higher_highs_filter and i >= higher_highs_period:
+                recent_high = 0.0
+                for j in range(max(0, i - higher_highs_period), i):
+                    if prices[j] > recent_high:
+                        recent_high = prices[j]
+                structure_filter_ok = current_price >= recent_high * 0.95  # Within 5% of recent high
+            
+            # Volume confirmation
+            if volume_confirmation:
+                if volume_sma_period == 10:
+                    avg_volume = vol_sma_10[i] if i < len(vol_sma_10) else volume[i]
+                elif volume_sma_period == 20:
+                    avg_volume = vol_sma_20[i] if i < len(vol_sma_20) else volume[i]
+                else:  # 30
+                    avg_volume = vol_sma_30[i] if i < len(vol_sma_30) else volume[i]
+                
+                current_volume = volume[i] if i < len(volume) else 0.0
+                volume_filter_ok = current_volume > avg_volume * 0.8  # At least 80% of average volume
+            
+            # Combined entry condition with all filters
+            if (rsi_entry_ok and sma_ok and cooldown_ok and 
+                trend_filter_ok and volatility_filter_ok and 
+                structure_filter_ok and volume_filter_ok):
+                
+                base_amount_usdt = balance * (base_percent / 100.0)
+                if base_amount_usdt > 1.0:
+                    fee_amount = base_amount_usdt * fees
+                    net_amount_usdt = base_amount_usdt - fee_amount
+                    coin_amount = net_amount_usdt / current_price
+                    
+                    balance -= base_amount_usdt
+                    position_size = coin_amount
+                    total_spent = base_amount_usdt
+                    average_entry = current_price
+                    last_entry_price = current_price
+                    active_deal = True
+                    safety_count = 0
+                    peak_price = current_price
+                    tp1_hit = tp2_hit = tp3_hit = False
+                    trailing_active = False
+                    num_trades += 1
+        
+        # 2. ACTIVE DEAL MANAGEMENT (same as before)
+        if active_deal:
+            # Safety orders
+            if safety_count < max_safeties:
+                current_deviation = initial_deviation
+                for j in range(safety_count):
+                    current_deviation *= step_multiplier
+                
+                price_drop_threshold = last_entry_price * (1.0 - current_deviation / 100.0)
+                safety_rsi_ok = current_rsi_1h < rsi_safety_thresh
+                
+                if current_price <= price_drop_threshold and safety_rsi_ok:
+                    safety_multiplier = volume_multiplier ** safety_count
+                    safety_base = initial_balance * (base_percent / 100.0)
+                    safety_amount_usdt = safety_base * safety_multiplier
+                    
+                    if safety_amount_usdt > balance:
+                        safety_amount_usdt = balance * 0.95
+                    
+                    if safety_amount_usdt > 1.0:
+                        fee_amount = safety_amount_usdt * fees
+                        net_amount_usdt = safety_amount_usdt - fee_amount
+                        safety_coins = net_amount_usdt / current_price
+                        
+                        balance -= safety_amount_usdt
+                        position_size += safety_coins
+                        total_spent += safety_amount_usdt
+                        average_entry = total_spent / position_size
+                        last_entry_price = current_price
+                        safety_count += 1
+                        num_trades += 1
+            
+            # Take profit conditions (same as before)
+            if position_size > 0:
+                profit_percent = (current_price - average_entry) / average_entry * 100.0
+                
+                # TP1
+                if profit_percent >= tp_level1 and not tp1_hit:
+                    tp1_sell = position_size * tp_percent1
+                    tp1_usdt_gross = tp1_sell * current_price
+                    tp1_fee = tp1_usdt_gross * fees
+                    tp1_usdt_net = tp1_usdt_gross - tp1_fee
+                    
+                    balance += tp1_usdt_net
+                    position_size -= tp1_sell
+                    tp1_hit = True
+                    trailing_active = True
+                    peak_price = current_price
+                    num_trades += 1
+                
+                # TP2
+                if profit_percent >= tp_level2 and not tp2_hit:
+                    tp2_sell = position_size * tp_percent2
+                    tp2_usdt_gross = tp2_sell * current_price
+                    tp2_fee = tp2_usdt_gross * fees
+                    tp2_usdt_net = tp2_usdt_gross - tp2_fee
+                    
+                    balance += tp2_usdt_net
+                    position_size -= tp2_sell
+                    tp2_hit = True
+                    num_trades += 1
+                
+                # TP3
+                if profit_percent >= tp_level3 and not tp3_hit:
+                    tp3_sell = position_size * tp_percent3
+                    tp3_usdt_gross = tp3_sell * current_price
+                    tp3_fee = tp3_usdt_gross * fees
+                    tp3_usdt_net = tp3_usdt_gross - tp3_fee
+                    
+                    balance += tp3_usdt_net
+                    position_size -= tp3_sell
+                    tp3_hit = True
+                    num_trades += 1
+            
+            # Trailing stop (same as before)
+            if trailing_active and position_size > 0:
+                if current_price > peak_price:
+                    peak_price = current_price
+                
+                effective_trailing = min(trailing_deviation, tp_level1)
+                trailing_threshold = peak_price * (1.0 - effective_trailing / 100.0)
+                
+                if current_price <= trailing_threshold:
+                    exit_usdt_gross = position_size * current_price
+                    exit_fee = exit_usdt_gross * fees
+                    exit_usdt_net = exit_usdt_gross - exit_fee
+                    
+                    balance += exit_usdt_net
+                    position_size = 0.0
+                    active_deal = False
+                    trailing_active = False
+                    last_close_step = i
+                    num_trades += 1
+            
+            # Close deal if position too small
+            if position_size < 0.0001:
+                active_deal = False
+                last_close_step = i
+        
+        # Record portfolio value
+        portfolio_value = balance + position_size * current_price
+        balance_history[i] = portfolio_value
+        
+        # Track drawdown with duration (same as before)
+        if portfolio_value > max_portfolio_value:
+            max_portfolio_value = portfolio_value
+            # End any ongoing drawdown
+            if current_drawdown_start >= 0:
+                drawdown_duration = i - current_drawdown_start
+                total_drawdown_duration += drawdown_duration
+                drawdown_count += 1
+                current_drawdown_start = -1
+        
+        current_drawdown = (max_portfolio_value - portfolio_value) / max_portfolio_value * 100.0
+        if current_drawdown > max_drawdown:
+            max_drawdown = current_drawdown
+        
+        # Track drawdown start
+        if current_drawdown > 1.0 and current_drawdown_start < 0:  # 1% threshold
+            current_drawdown_start = i
+    
+    # Handle any ongoing drawdown at the end
+    if current_drawdown_start >= 0:
+        drawdown_duration = n_points - 1 - current_drawdown_start
+        total_drawdown_duration += drawdown_duration
+        drawdown_count += 1
+    
+    # Calculate average drawdown duration (in minutes for 1m data)
+    avg_drawdown_duration = total_drawdown_duration / max(1, drawdown_count)
+    
+    # Final portfolio value
+    final_portfolio_value = balance + position_size * prices[-1]
+    
+    return final_portfolio_value, max_drawdown, num_trades, balance_history, avg_drawdown_duration
+
+
+# Keep the original fast version for backward compatibility
 @njit
 def fast_simulate_strategy(
     prices: np.ndarray,
@@ -119,10 +479,10 @@ def fast_simulate_strategy(
     sma_slow: np.ndarray,
     params_array: np.ndarray,
     initial_balance: float = 10000.0
-) -> Tuple[float, float, int, np.ndarray]:
+) -> Tuple[float, float, int, np.ndarray, float]:
     """
     Numba-optimized DCA simulation for fast optimization
-    Returns: (final_balance, max_drawdown, num_trades, balance_history)
+    Returns: (final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration)
     """
     
     # Unpack parameters
@@ -166,9 +526,12 @@ def fast_simulate_strategy(
     n_points = len(prices)
     balance_history = np.zeros(n_points)
     
-    # Drawdown tracking
+    # Drawdown tracking with duration
     max_portfolio_value = initial_balance
     max_drawdown = 0.0
+    current_drawdown_start = -1
+    total_drawdown_duration = 0.0
+    drawdown_count = 0
     
     for i in range(n_points):
         current_price = prices[i]
@@ -304,18 +667,37 @@ def fast_simulate_strategy(
         portfolio_value = balance + position_size * current_price
         balance_history[i] = portfolio_value
         
-        # Track drawdown
+        # Track drawdown with duration
         if portfolio_value > max_portfolio_value:
             max_portfolio_value = portfolio_value
+            # End any ongoing drawdown
+            if current_drawdown_start >= 0:
+                drawdown_duration = i - current_drawdown_start
+                total_drawdown_duration += drawdown_duration
+                drawdown_count += 1
+                current_drawdown_start = -1
         
         current_drawdown = (max_portfolio_value - portfolio_value) / max_portfolio_value * 100.0
         if current_drawdown > max_drawdown:
             max_drawdown = current_drawdown
+        
+        # Track drawdown start
+        if current_drawdown > 1.0 and current_drawdown_start < 0:  # 1% threshold
+            current_drawdown_start = i
+    
+    # Handle any ongoing drawdown at the end
+    if current_drawdown_start >= 0:
+        drawdown_duration = n_points - 1 - current_drawdown_start
+        total_drawdown_duration += drawdown_duration
+        drawdown_count += 1
+    
+    # Calculate average drawdown duration (in minutes for 1m data)
+    avg_drawdown_duration = total_drawdown_duration / max(1, drawdown_count)
     
     # Final portfolio value
     final_portfolio_value = balance + position_size * prices[-1]
     
-    return final_portfolio_value, max_drawdown, num_trades, balance_history
+    return final_portfolio_value, max_drawdown, num_trades, balance_history, avg_drawdown_duration
 
 
 # Create a proper trade-tracking version for visualization
@@ -463,7 +845,7 @@ class FastBacktester:
             params.fees
         ])
         
-        final_balance, max_drawdown, num_trades, balance_history = fast_simulate_strategy(
+        final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = fast_simulate_strategy(
             self.prices,
             self.indicators['rsi_1h'],
             self.indicators['rsi_4h'],
@@ -502,20 +884,91 @@ class FastOptimizer:
         return self.optimization_config.suggest_params(trial)
     
     def objective(self, trial):
-        """Fast objective function"""
+        """Enhanced objective function optimizing for APY and shorter drawdown duration with 3commas filters"""
         params = self._suggest_params(trial)
         
         try:
-            apy, max_drawdown, num_trades, _ = self.backtester.simulate_strategy_fast(params)
+            # Pack parameters including 3commas conditional filters
+            params_array = np.array([
+                params.base_percent,
+                params.initial_deviation, 
+                params.trailing_deviation,
+                params.tp_level1,
+                params.tp_percent1,
+                params.tp_percent2,
+                params.tp_percent3,
+                params.rsi_entry_threshold,
+                params.rsi_safety_threshold,
+                params.fees,
+                # 3commas conditional parameters
+                float(params.sma_trend_filter),
+                float(params.sma_trend_period),
+                float(params.ema_trend_filter),
+                float(params.ema_trend_period),
+                float(params.atr_volatility_filter),
+                float(params.atr_period),
+                params.atr_multiplier,
+                float(params.higher_highs_filter),
+                float(params.higher_highs_period),
+                float(params.volume_confirmation),
+                float(params.volume_sma_period)
+            ])
             
-            # Fitness function: 60% APY weight, 40% drawdown penalty
-            fitness = 0.6 * apy - 0.4 * max_drawdown
+            final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
+                self.backtester.prices,
+                self.backtester.indicators['rsi_1h'],
+                self.backtester.indicators['rsi_4h'],
+                self.backtester.indicators['sma_fast_1h'], 
+                self.backtester.indicators['sma_slow_1h'],
+                # Additional indicators for 3commas filters
+                self.backtester.indicators['sma_50'],
+                self.backtester.indicators['sma_100'],
+                self.backtester.indicators['sma_200'],
+                self.backtester.indicators['ema_21'],
+                self.backtester.indicators['ema_50'],
+                self.backtester.indicators['ema_100'],
+                self.backtester.indicators['atr_14'],
+                self.backtester.indicators['atr_21'],
+                self.backtester.indicators['atr_28'],
+                self.backtester.indicators['volume'],
+                self.backtester.indicators['vol_sma_10'],
+                self.backtester.indicators['vol_sma_20'],
+                self.backtester.indicators['vol_sma_30'],
+                params_array,
+                self.backtester.initial_balance
+            )
+            
+            # Calculate APY
+            days = (self.backtester.timestamps[-1] - self.backtester.timestamps[0]) / np.timedelta64(1, 'D')
+            years = days / 365.25
+            apy = (pow(final_balance / self.backtester.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
+            
+            # Enhanced fitness function heavily prioritizing APY:
+            # 1. Higher APY (80% weight) - MOST IMPORTANT
+            # 2. Lower max drawdown (15% weight) 
+            # 3. Shorter drawdown duration (5% weight)
+            
+            # Convert drawdown duration from minutes to hours for better scaling
+            avg_drawdown_hours = avg_drawdown_duration / 60.0
+            
+            # Light penalty for long drawdowns (normalize to reasonable scale)
+            drawdown_duration_penalty = min(avg_drawdown_hours / 168.0, 2.0)  # Cap at 2x penalty, weekly scale
+            
+            # Light penalty for high drawdowns (allow up to 40% before heavy penalty)
+            drawdown_penalty = max(0, max_drawdown - 40.0) * 0.5  # Only penalize above 40%
+            
+            fitness = (
+                0.8 * apy -                           # Maximize APY (80% - PRIORITY)
+                0.15 * drawdown_penalty -             # Light drawdown penalty (15%)
+                0.05 * drawdown_duration_penalty      # Very light duration penalty (5%)
+            )
             
             # Update best results
             if fitness > self.best_fitness:
                 self.best_fitness = fitness
                 self.best_apy = apy
                 self.best_drawdown = max_drawdown
+                self.best_drawdown_duration = avg_drawdown_duration
                 # Store the complete params object
                 self.best_params = params
                 self.best_num_trades = num_trades
@@ -824,6 +1277,30 @@ def main():
     # Final simulation with trades for visualization
     apy, max_drawdown, balance_history, trades = Visualizer.simulate_with_trades(backtester, strategy_params)
     
+    # Get drawdown duration from the optimized simulation
+    params_array = np.array([
+        strategy_params.base_percent,
+        strategy_params.initial_deviation, 
+        strategy_params.trailing_deviation,
+        strategy_params.tp_level1,
+        strategy_params.tp_percent1,
+        strategy_params.tp_percent2,
+        strategy_params.tp_percent3,
+        strategy_params.rsi_entry_threshold,
+        strategy_params.rsi_safety_threshold,
+        strategy_params.fees
+    ])
+    
+    _, _, _, _, avg_drawdown_duration = fast_simulate_strategy(
+        backtester.prices,
+        backtester.indicators['rsi_1h'],
+        backtester.indicators['rsi_4h'],
+        backtester.indicators['sma_fast_1h'], 
+        backtester.indicators['sma_slow_1h'],
+        params_array,
+        backtester.initial_balance
+    )
+    
     # Calculate additional metrics
     num_trades = len(trades)
     final_balance = args.initial_balance * (1 + apy/100)
@@ -835,6 +1312,7 @@ def main():
         'final_balance': final_balance,
         'apy': round(apy, 2),
         'max_drawdown': round(max_drawdown, 2),
+        'avg_drawdown_duration_hours': round(avg_drawdown_duration/60, 1),
         'total_trades': num_trades,
         'parameters': {
             'tp_level1': strategy_params.tp_level1,
@@ -844,7 +1322,21 @@ def main():
             'trailing_deviation': strategy_params.trailing_deviation,
             'tp_percent1': strategy_params.tp_percent1,
             'tp_percent2': strategy_params.tp_percent2,
-            'tp_percent3': strategy_params.tp_percent3
+            'tp_percent3': strategy_params.tp_percent3,
+            'rsi_entry_threshold': strategy_params.rsi_entry_threshold,
+            'rsi_safety_threshold': strategy_params.rsi_safety_threshold,
+            # 3commas conditional filters
+            'sma_trend_filter': strategy_params.sma_trend_filter,
+            'sma_trend_period': strategy_params.sma_trend_period,
+            'ema_trend_filter': strategy_params.ema_trend_filter,
+            'ema_trend_period': strategy_params.ema_trend_period,
+            'atr_volatility_filter': strategy_params.atr_volatility_filter,
+            'atr_period': strategy_params.atr_period,
+            'atr_multiplier': strategy_params.atr_multiplier,
+            'higher_highs_filter': strategy_params.higher_highs_filter,
+            'higher_highs_period': strategy_params.higher_highs_period,
+            'volume_confirmation': strategy_params.volume_confirmation,
+            'volume_sma_period': strategy_params.volume_sma_period
         },
         'data_period': {
             'start': data.index[0].isoformat(),
@@ -859,6 +1351,7 @@ def main():
     print(f"Final Balance: ${final_balance:,.2f}")
     print(f"APY: {apy:.2f}%")
     print(f"Max Drawdown: {max_drawdown:.2f}%")
+    print(f"Avg Drawdown Duration: {avg_drawdown_duration/60:.1f} hours")
     print(f"Total Trades: {num_trades}")
     print("=" * 60)
     

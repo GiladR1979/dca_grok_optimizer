@@ -36,6 +36,26 @@ class OptimizationRanges:
     rsi_safety_threshold: List[float] = None   # RSI safety threshold
     rsi_exit_threshold: List[float] = None     # RSI exit threshold
 
+    # === 3COMMAS CONDITIONAL TRADE START CONDITIONS ===
+    # Market trend filters (available on 3commas)
+    sma_trend_filter: List[bool] = None        # Require price > SMA for trend confirmation
+    sma_trend_period: List[int] = None         # SMA period for trend filter (50, 100, 200)
+    ema_trend_filter: List[bool] = None        # Require price > EMA for trend confirmation  
+    ema_trend_period: List[int] = None         # EMA period for trend filter (21, 50, 100)
+    
+    # Volatility filters (available on 3commas)
+    atr_volatility_filter: List[bool] = None   # Enable ATR volatility filter
+    atr_period: List[int] = None               # ATR calculation period
+    atr_multiplier: List[float] = None         # ATR threshold multiplier
+    
+    # Market structure filters (available on 3commas)
+    higher_highs_filter: List[bool] = None     # Require recent higher highs
+    higher_highs_period: List[int] = None      # Period to check for higher highs
+    
+    # Volume confirmation (available on 3commas)
+    volume_confirmation: List[bool] = None     # Require volume confirmation
+    volume_sma_period: List[int] = None        # Volume SMA period for comparison
+
     # === FIXED PARAMETERS ===
     fees: float = 0.075                       # Trading fees %
 
@@ -80,6 +100,40 @@ class OptimizationRanges:
         if self.rsi_exit_threshold is None:
             self.rsi_exit_threshold = [60.0, 65.0, 70.0, 75.0, 80.0]
 
+        # 3commas conditional trade start conditions - LESS RESTRICTIVE for better APY
+        if self.sma_trend_filter is None:
+            self.sma_trend_filter = [False, False, False, True]  # 75% chance disabled
+
+        if self.sma_trend_period is None:
+            self.sma_trend_period = [50, 100]  # Removed 200 (too restrictive)
+
+        if self.ema_trend_filter is None:
+            self.ema_trend_filter = [False, False, False, True]  # 75% chance disabled
+
+        if self.ema_trend_period is None:
+            self.ema_trend_period = [21, 50]  # Removed 100 (too restrictive)
+
+        if self.atr_volatility_filter is None:
+            self.atr_volatility_filter = [False, False, True]  # 67% chance disabled
+
+        if self.atr_period is None:
+            self.atr_period = [14, 21]  # Removed 28 (too restrictive)
+
+        if self.atr_multiplier is None:
+            self.atr_multiplier = [2.0, 2.5, 3.0, 4.0, 5.0]  # Higher multipliers = less restrictive
+
+        if self.higher_highs_filter is None:
+            self.higher_highs_filter = [False, False, True]  # 67% chance disabled
+
+        if self.higher_highs_period is None:
+            self.higher_highs_period = [10, 20]  # Removed 30 (too restrictive)
+
+        if self.volume_confirmation is None:
+            self.volume_confirmation = [False, False, True]  # 67% chance disabled
+
+        if self.volume_sma_period is None:
+            self.volume_sma_period = [10, 20]  # Removed 30 (too restrictive)
+
 
 @dataclass
 class StrategyParams:
@@ -107,6 +161,26 @@ class StrategyParams:
     rsi_entry_threshold: float = 40.0        # RSI entry threshold
     rsi_safety_threshold: float = 30.0       # RSI safety threshold
     rsi_exit_threshold: float = 70.0         # RSI exit threshold
+
+    # === 3COMMAS CONDITIONAL TRADE START CONDITIONS ===
+    # Market trend filters (available on 3commas)
+    sma_trend_filter: bool = False           # Require price > SMA for trend confirmation
+    sma_trend_period: int = 200              # SMA period for trend filter (50, 100, 200)
+    ema_trend_filter: bool = False           # Require price > EMA for trend confirmation  
+    ema_trend_period: int = 50               # EMA period for trend filter (21, 50, 100)
+    
+    # Volatility filters (available on 3commas)
+    atr_volatility_filter: bool = False      # Enable ATR volatility filter
+    atr_period: int = 14                     # ATR calculation period
+    atr_multiplier: float = 1.5              # ATR threshold multiplier
+    
+    # Market structure filters (available on 3commas)
+    higher_highs_filter: bool = False        # Require recent higher highs
+    higher_highs_period: int = 20            # Period to check for higher highs
+    
+    # Volume confirmation (available on 3commas)
+    volume_confirmation: bool = False        # Require volume confirmation
+    volume_sma_period: int = 20              # Volume SMA period for comparison
 
     # === FIXED PARAMETERS ===
     fees: float = 0.075                      # Trading fees %
@@ -239,6 +313,19 @@ class OptimizationConfig:
             rsi_entry_threshold=trial.suggest_categorical('rsi_entry_threshold', self.ranges.rsi_entry_threshold),
             rsi_safety_threshold=trial.suggest_categorical('rsi_safety_threshold', self.ranges.rsi_safety_threshold),
             rsi_exit_threshold=trial.suggest_categorical('rsi_exit_threshold', self.ranges.rsi_exit_threshold),
+
+            # 3commas conditional trade start conditions
+            sma_trend_filter=trial.suggest_categorical('sma_trend_filter', self.ranges.sma_trend_filter),
+            sma_trend_period=trial.suggest_categorical('sma_trend_period', self.ranges.sma_trend_period),
+            ema_trend_filter=trial.suggest_categorical('ema_trend_filter', self.ranges.ema_trend_filter),
+            ema_trend_period=trial.suggest_categorical('ema_trend_period', self.ranges.ema_trend_period),
+            atr_volatility_filter=trial.suggest_categorical('atr_volatility_filter', self.ranges.atr_volatility_filter),
+            atr_period=trial.suggest_categorical('atr_period', self.ranges.atr_period),
+            atr_multiplier=trial.suggest_categorical('atr_multiplier', self.ranges.atr_multiplier),
+            higher_highs_filter=trial.suggest_categorical('higher_highs_filter', self.ranges.higher_highs_filter),
+            higher_highs_period=trial.suggest_categorical('higher_highs_period', self.ranges.higher_highs_period),
+            volume_confirmation=trial.suggest_categorical('volume_confirmation', self.ranges.volume_confirmation),
+            volume_sma_period=trial.suggest_categorical('volume_sma_period', self.ranges.volume_sma_period),
 
             # Fixed
             fees=self.ranges.fees
