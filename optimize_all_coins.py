@@ -60,42 +60,39 @@ def run_optimization(coin_data, trials=5000, timeout_minutes=30):
     start_time = time.time()
     
     try:
-        # Run with real-time output
-        process = subprocess.Popen(
+        # Simple approach - just run and capture all output at the end
+        print("📊 Running optimization (this may take a few minutes)...")
+        print("   ⏳ Please wait for completion...")
+        
+        # Set timeout
+        timeout_seconds = timeout_minutes * 60
+        
+        result = subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
-            bufsize=1,
-            universal_newlines=True,
+            timeout=timeout_seconds,
             cwd=os.getcwd()
         )
         
-        # Capture output in real-time
-        output_lines = []
+        elapsed_time = time.time() - start_time
+        
+        # Process output after completion
+        output_lines = result.stdout.split('\n') if result.stdout else []
         apy = None
         drawdown = None
         trades = None
         
-        print("📊 Live output:")
+        print("\n📊 Optimization completed! Results:")
         print("-" * 40)
         
-        # Read output line by line
-        while True:
-            output = process.stdout.readline()
-            if output == '' and process.poll() is not None:
-                break
-            if output:
-                line = output.strip()
-                output_lines.append(line)
+        # Show important lines from output
+        for line in output_lines:
+            line = line.strip()
+            if line and any(keyword in line for keyword in ['Best:', 'APY:', 'GPU detected', 'FAST BACKTEST RESULTS', 'Final Balance:', 'Max Drawdown:', 'Total Trades:']):
+                print(f"   {line}")
                 
-                # Show important lines immediately
-                if any(keyword in line for keyword in ['Best:', 'APY:', 'GPU detected', 'FAST BACKTEST RESULTS', 'Final Balance:', 'Max Drawdown:', 'Total Trades:']):
-                    print(f"   {line}")
-                elif 'trials' in line.lower() and '%' in line:
-                    print(f"   {line}")
-                
-                # Extract metrics as they come
+                # Extract metrics
                 if 'APY:' in line:
                     try:
                         apy = float(line.split('APY:')[1].split('%')[0].strip())
@@ -112,10 +109,7 @@ def run_optimization(coin_data, trials=5000, timeout_minutes=30):
                     except:
                         pass
         
-        # Wait for process to complete
-        stderr_output = process.stderr.read()
-        return_code = process.poll()
-        elapsed_time = time.time() - start_time
+        return_code = result.returncode
         
         if return_code == 0:
             print("-" * 40)
@@ -139,11 +133,11 @@ def run_optimization(coin_data, trials=5000, timeout_minutes=30):
             }
         else:
             print(f"❌ {coin} failed with return code {return_code}")
-            print(f"Error: {stderr_output}")
+            print(f"Error: {result.stderr}")
             return {
                 'coin': coin,
                 'status': 'failed',
-                'error': stderr_output,
+                'error': result.stderr,
                 'elapsed_minutes': elapsed_time / 60,
                 'trials': trials
             }
