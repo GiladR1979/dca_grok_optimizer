@@ -1,2 +1,29 @@
-/data/
-/results/
+# Data files (CSV files, large datasets)
+data/
+*.csv
+
+# Results and output files
+results/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log
