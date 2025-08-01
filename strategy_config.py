@@ -38,22 +38,22 @@ class OptimizationRanges:
     # Market trend filters (available on 3commas)
     sma_trend_filter: List[bool] = None        # Require price > SMA for trend confirmation
     sma_trend_period: List[int] = None         # SMA period for trend filter (50, 100, 200)
-    ema_trend_filter: List[bool] = None        # Require price > EMA for trend confirmation  
+    ema_trend_filter: List[bool] = None        # Require price > EMA for trend confirmation
     ema_trend_period: List[int] = None         # EMA period for trend filter (21, 50, 100)
-    
+
     # Volatility filters (available on 3commas)
     atr_volatility_filter: List[bool] = None   # Enable ATR volatility filter
     atr_period: List[int] = None               # ATR calculation period
     atr_multiplier: List[float] = None         # ATR threshold multiplier
-    
+
     # Market structure filters (available on 3commas)
     higher_highs_filter: List[bool] = None     # Require recent higher highs
     higher_highs_period: List[int] = None      # Period to check for higher highs
-    
+
     # Volume confirmation (available on 3commas)
     volume_confirmation: List[bool] = None     # Require volume confirmation
     volume_sma_period: List[int] = None        # Volume SMA period for comparison
-    
+
     # === SUPERTREND DRAWDOWN ELIMINATION (NEW) ===
     use_supertrend_filter: List[bool] = None   # Enable SuperTrend trend filtering
     supertrend_timeframe: List[str] = None     # Timeframe for SuperTrend ('1h', '4h', '1d')
@@ -68,16 +68,18 @@ class OptimizationRanges:
     def __post_init__(self):
         """Set default ranges if not provided"""
         if self.base_percent is None:
-            self.base_percent = [1.0, 1.5, 2.0, 2.5, 3.0]
+            # FIXED: Limited to ensure total position never exceeds 100%
+            # With max_safeties=8 and volume_multiplier=1.5, max base is 1.33%
+            self.base_percent = [1.33] # DO NOT CHANGE
 
         if self.volume_multiplier is None:
-            self.volume_multiplier = [1.5]
+            self.volume_multiplier = [1.5] # DO NOT CHANGE
 
         if self.initial_deviation is None:
             self.initial_deviation = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
 
         if self.step_multiplier is None:
-            self.step_multiplier = [1.2, 1.3, 1.4, 1.5]
+            self.step_multiplier = [1, 1.1, 1.2, 1.3, 1.4, 1.5]
 
         if self.max_safeties is None:
             self.max_safeties = [8]
@@ -133,20 +135,20 @@ class OptimizationRanges:
 
         if self.volume_sma_period is None:
             self.volume_sma_period = [10, 20]  # Removed 30 (too restrictive)
-        
+
         # SuperTrend drawdown elimination settings
         if self.use_supertrend_filter is None:
             self.use_supertrend_filter = [True, False]  # 50% chance enabled for testing
-        
+
         if self.supertrend_timeframe is None:
             self.supertrend_timeframe = ['15m', '1h', '4h', '1d']
-        
+
         if self.supertrend_period is None:
             self.supertrend_period = [7, 10, 14, 21]  # ATR periods to test
-        
+
         if self.supertrend_multiplier is None:
             self.supertrend_multiplier = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  # Multipliers to test
-        
+
         if self.require_bullish_supertrend is None:
             self.require_bullish_supertrend = [True, False]  # Test both modes
 
@@ -180,22 +182,22 @@ class StrategyParams:
     # Market trend filters (available on 3commas)
     sma_trend_filter: bool = False           # Require price > SMA for trend confirmation
     sma_trend_period: int = 200              # SMA period for trend filter (50, 100, 200)
-    ema_trend_filter: bool = False           # Require price > EMA for trend confirmation  
+    ema_trend_filter: bool = False           # Require price > EMA for trend confirmation
     ema_trend_period: int = 50               # EMA period for trend filter (21, 50, 100)
-    
+
     # Volatility filters (available on 3commas)
     atr_volatility_filter: bool = False      # Enable ATR volatility filter
     atr_period: int = 14                     # ATR calculation period
     atr_multiplier: float = 1.5              # ATR threshold multiplier
-    
+
     # Market structure filters (available on 3commas)
     higher_highs_filter: bool = False        # Require recent higher highs
     higher_highs_period: int = 20            # Period to check for higher highs
-    
+
     # Volume confirmation (available on 3commas)
     volume_confirmation: bool = False        # Require volume confirmation
     volume_sma_period: int = 20              # Volume SMA period for comparison
-    
+
     # === SUPERTREND DRAWDOWN ELIMINATION (NEW) ===
     use_supertrend_filter: bool = False      # Enable SuperTrend trend filtering for drawdown elimination
     supertrend_timeframe: str = '4h'         # Timeframe for SuperTrend analysis ('1h', '4h', '1d')
@@ -336,7 +338,7 @@ class OptimizationConfig:
             higher_highs_period=trial.suggest_categorical('higher_highs_period', self.ranges.higher_highs_period),
             volume_confirmation=trial.suggest_categorical('volume_confirmation', self.ranges.volume_confirmation),
             volume_sma_period=trial.suggest_categorical('volume_sma_period', self.ranges.volume_sma_period),
-            
+
             # SuperTrend drawdown elimination
             use_supertrend_filter=trial.suggest_categorical('use_supertrend_filter', self.ranges.use_supertrend_filter),
             supertrend_timeframe=trial.suggest_categorical('supertrend_timeframe', self.ranges.supertrend_timeframe),
@@ -364,18 +366,23 @@ class MarketOptimizationRanges:
     def bull_market() -> OptimizationRanges:
         """Ranges optimized for bull markets"""
         return OptimizationRanges(
-            base_percent=[2.0, 3.0, 4.0, 5.0, 7.5, 10.0],           # Larger positions
-            tp_level1=[3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0],        # Higher TPs
+            # FIXED: With volume_multiplier=1.5 and max_safeties=8, max base is 1.33% for 100% limit
+            base_percent=[0.75, 1.0, 1.25, 1.33],                   # Limited to stay under 100%
+            volume_multiplier=[1.5],                                # Fixed multiplier
+            max_safeties=[8],                                       # Fixed max safeties
+            tp_level1=[3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0],       # Higher TPs
             tp_percent1=[100.0],  # Single TP - sell all position
-            rsi_entry_threshold=[45.0, 50.0, 55.0, 60.0, 65.0],     # More entries
-            trailing_deviation=[2.0, 3.0, 4.0, 5.0]                 # Wider stops
+            rsi_entry_threshold=[45.0, 50.0, 55.0, 60.0, 65.0],    # More entries
+            trailing_deviation=[2.0, 3.0, 4.0, 5.0]                # Wider stops
         )
 
     @staticmethod
     def bear_market() -> OptimizationRanges:
         """Ranges optimized for bear markets"""
         return OptimizationRanges(
-            base_percent=[0.5, 1.0, 1.5, 2.0, 2.5],                 # Smaller positions
+            base_percent=[0.5, 0.75, 1.0, 1.25, 1.33],              # Limited to stay under 100%
+            volume_multiplier=[1.5],                                # Fixed multiplier
+            max_safeties=[8],                                       # Fixed max safeties
             tp_level1=[1.0, 1.5, 2.0, 2.5, 3.0],                    # Lower TPs
             tp_percent1=[100.0],  # Single TP - sell all position
             rsi_entry_threshold=[25.0, 30.0, 35.0, 40.0, 45.0],     # Conservative entries
@@ -386,7 +393,9 @@ class MarketOptimizationRanges:
     def sideways_market() -> OptimizationRanges:
         """Ranges optimized for sideways markets"""
         return OptimizationRanges(
-            base_percent=[1.0, 1.5, 2.0, 2.5, 3.0],
+            base_percent=[0.5, 0.75, 1.0, 1.25, 1.33],              # Limited to stay under 100%
+            volume_multiplier=[1.5],                                # Fixed multiplier
+            max_safeties=[8],                                       # Fixed max safeties
             tp_level1=[1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
             tp_percent1=[100.0],  # Single TP - sell all position
             rsi_entry_threshold=[35.0, 40.0, 45.0, 50.0, 55.0],
