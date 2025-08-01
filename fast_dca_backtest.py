@@ -2020,10 +2020,12 @@ def main():
         return
 
     # Calculate additional metrics for results
-    if not args.optimize:
+    num_trades = len(trades)
+    avg_drawdown_duration = 0  # Default value, will be calculated properly if needed
+    
+    if not args.optimize and not args.drawdown_elimination:
         # For non-optimization runs, get additional metrics if needed
-        num_trades = len(trades)
-        avg_drawdown_duration = 0  # Will be calculated properly if needed
+        pass  # Metrics already calculated above
 
     final_balance = args.initial_balance * (1 + apy/100)
 
@@ -2037,12 +2039,15 @@ def main():
         'avg_drawdown_duration_hours': round(avg_drawdown_duration/60, 1),
         'total_trades': num_trades,
         'parameters': {
+            # DCA parameters
+            'base_percent': strategy_params.base_percent,
             'tp_level1': strategy_params.tp_level1,
             'initial_deviation': strategy_params.initial_deviation,
             'trailing_deviation': strategy_params.trailing_deviation,
             'tp_percent1': strategy_params.tp_percent1,
             'rsi_entry_threshold': strategy_params.rsi_entry_threshold,
             'rsi_safety_threshold': strategy_params.rsi_safety_threshold,
+            'fees': strategy_params.fees,
             # 3commas conditional filters
             'sma_trend_filter': strategy_params.sma_trend_filter,
             'sma_trend_period': strategy_params.sma_trend_period,
@@ -2054,7 +2059,13 @@ def main():
             'higher_highs_filter': strategy_params.higher_highs_filter,
             'higher_highs_period': strategy_params.higher_highs_period,
             'volume_confirmation': strategy_params.volume_confirmation,
-            'volume_sma_period': strategy_params.volume_sma_period
+            'volume_sma_period': strategy_params.volume_sma_period,
+            # SuperTrend filters (Phase 1 drawdown elimination)
+            'use_supertrend_filter': strategy_params.use_supertrend_filter,
+            'supertrend_timeframe': strategy_params.supertrend_timeframe,
+            'supertrend_period': strategy_params.supertrend_period,
+            'supertrend_multiplier': strategy_params.supertrend_multiplier,
+            'require_bullish_supertrend': strategy_params.require_bullish_supertrend
         },
         'data_period': {
             'start': data.index[0].isoformat(),
