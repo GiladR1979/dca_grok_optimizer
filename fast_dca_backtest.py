@@ -1243,6 +1243,10 @@ class FastOptimizer:
                 if max_drawdown > params.max_acceptable_drawdown:
                     return -1000 - max_drawdown  # Heavy penalty
                 
+                # Require minimum trading activity to avoid completely inactive strategies
+                if num_trades < 5:  # Minimum 5 trades over the period
+                    return -500 - (5 - num_trades) * 50  # Penalty for too few trades
+                
                 # Focus heavily on drawdown reduction in phase 1 (70% weight)
                 fitness = 0.3 * apy - 0.7 * max_drawdown
                 
