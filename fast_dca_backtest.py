@@ -55,6 +55,17 @@ except ImportError:
 from strategy_config import StrategyParams, OptimizationConfig, StrategyPresets
 
 
+@dataclass
+class Trade:
+    """Represents a single trade for visualization"""
+    timestamp: datetime
+    action: str
+    amount_coin: float
+    price: float
+    usdt_amount: float
+    reason: str
+
+
 class FastDataProcessor:
     """Optimized data processing with caching and vectorization"""
 
@@ -301,6 +312,220 @@ class FastDataProcessor:
         return indicators
 
     # Removed _fast_forward_fill - using pandas reindex instead
+
+
+# Enhanced simulation with trade tracking for visualization
+def enhanced_simulate_strategy_with_trades(
+    prices: np.ndarray,
+    timestamps: np.ndarray,
+    rsi_1h: np.ndarray,
+    rsi_4h: np.ndarray,
+    sma_fast: np.ndarray,
+    sma_slow: np.ndarray,
+    # Additional indicators for 3commas filters
+    sma_50: np.ndarray,
+    sma_100: np.ndarray,
+    sma_200: np.ndarray,
+    ema_21: np.ndarray,
+    ema_50: np.ndarray,
+    ema_100: np.ndarray,
+    atr_14: np.ndarray,
+    atr_21: np.ndarray,
+    atr_28: np.ndarray,
+    volume: np.ndarray,
+    vol_sma_10: np.ndarray,
+    vol_sma_20: np.ndarray,
+    vol_sma_30: np.ndarray,
+    # SuperTrend indicators for drawdown elimination
+    supertrend_direction_1h: np.ndarray,
+    supertrend_direction_4h: np.ndarray,
+    supertrend_direction_1d: np.ndarray,
+    params_array: np.ndarray,
+    initial_balance: float = 10000.0
+) -> Tuple[float, float, int, np.ndarray, float, List[Trade]]:
+    """
+    Enhanced DCA simulation WITH ACTUAL TRADE TRACKING
+    Returns: (final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration, trades_list)
+    """
+    
+    # Run the numba-optimized simulation first
+    final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
+        prices, rsi_1h, rsi_4h, sma_fast, sma_slow,
+        sma_50, sma_100, sma_200, ema_21, ema_50, ema_100,
+        atr_14, atr_21, atr_28, volume, vol_sma_10, vol_sma_20, vol_sma_30,
+        supertrend_direction_1h, supertrend_direction_4h, supertrend_direction_1d,
+        params_array, initial_balance
+    )
+    
+    # Now run a Python version to track actual trades
+    trades = []
+    
+    # Unpack parameters
+    base_percent = params_array[0]
+    initial_deviation = params_array[1]
+    trailing_deviation = params_array[2]
+    tp_level1 = params_array[3]
+    tp_percent1 = params_array[4] / 100.0
+    rsi_entry_thresh = params_array[5]
+    rsi_safety_thresh = params_array[6]
+    fees = params_array[7] / 100.0
+    
+    # Unpack filter parameters
+    sma_trend_filter = bool(params_array[8])
+    sma_trend_period = int(params_array[9])
+    ema_trend_filter = bool(params_array[10])
+    ema_trend_period = int(params_array[11])
+    atr_volatility_filter = bool(params_array[12])
+    atr_period = int(params_array[13])
+    atr_multiplier = params_array[14]
+    higher_highs_filter = bool(params_array[15])
+    higher_highs_period = int(params_array[16])
+    volume_confirmation = bool(params_array[17])
+    volume_sma_period = int(params_array[18])
+    use_supertrend_filter = bool(params_array[19])
+    supertrend_timeframe = int(params_array[20])
+    require_bullish_supertrend = bool(params_array[21])
+    
+    # Constants
+    step_multiplier = 1.5
+    volume_multiplier = 1.2
+    max_safeties = 8
+    
+    # State variables
+    balance = initial_balance
+    position_size = 0.0
+    average_entry = 0.0
+    total_spent = 0.0
+    active_deal = False
+    safety_count = 0
+    last_entry_price = 0.0
+    last_close_step = -999999
+    
+    # Track actual trades
+    for i in range(len(prices)):
+        current_price = prices[i]
+        current_timestamp = timestamps[i]
+        current_rsi_1h = rsi_1h[i] if i < len(rsi_1h) else 50.0
+        current_sma_fast = sma_fast[i] if i < len(sma_fast) else current_price
+        current_sma_slow = sma_slow[i] if i < len(sma_slow) else current_price
+        
+        # Check for new deal entry
+        if not active_deal:
+            # Basic conditions
+            rsi_entry_ok = current_rsi_1h < rsi_entry_thresh
+            sma_ok = current_sma_fast > current_sma_slow
+            cooldown_ok = (i - last_close_step) >= 5
+            
+            # Apply all filters
+            all_filters_ok = True
+            
+            # SMA trend filter
+            if sma_trend_filter:
+                if sma_trend_period == 50:
+                    all_filters_ok = all_filters_ok and (current_price > sma_50[i] if i < len(sma_50) else True)
+                elif sma_trend_period == 100:
+                    all_filters_ok = all_filters_ok and (current_price > sma_100[i] if i < len(sma_100) else True)
+                elif sma_trend_period == 200:
+                    all_filters_ok = all_filters_ok and (current_price > sma_200[i] if i < len(sma_200) else True)
+            
+            # SuperTrend filter
+            if use_supertrend_filter and require_bullish_supertrend:
+                if supertrend_timeframe == 0:  # 1h
+                    supertrend_direction = supertrend_direction_1h[i] if i < len(supertrend_direction_1h) else 1.0
+                elif supertrend_timeframe == 1:  # 4h
+                    supertrend_direction = supertrend_direction_4h[i] if i < len(supertrend_direction_4h) else 1.0
+                else:  # 1d
+                    supertrend_direction = supertrend_direction_1d[i] if i < len(supertrend_direction_1d) else 1.0
+                all_filters_ok = all_filters_ok and (supertrend_direction > 0)
+            
+            # Enter new deal if all conditions met
+            if rsi_entry_ok and sma_ok and cooldown_ok and all_filters_ok:
+                base_amount_usdt = balance * (base_percent / 100.0)
+                if base_amount_usdt > 1.0:
+                    coin_amount = base_amount_usdt / current_price
+                    
+                    trades.append(Trade(
+                        timestamp=current_timestamp,
+                        action='buy',
+                        amount_coin=coin_amount,
+                        price=current_price,
+                        usdt_amount=base_amount_usdt,
+                        reason='base_order'
+                    ))
+                    
+                    balance -= base_amount_usdt
+                    position_size = coin_amount
+                    total_spent = base_amount_usdt
+                    average_entry = current_price
+                    last_entry_price = current_price
+                    active_deal = True
+                    safety_count = 0
+        
+        # Active deal management
+        elif active_deal:
+            # Check for safety orders
+            if safety_count < max_safeties:
+                current_deviation = initial_deviation
+                for j in range(safety_count):
+                    current_deviation *= step_multiplier
+                
+                price_drop_threshold = last_entry_price * (1.0 - current_deviation / 100.0)
+                safety_rsi_ok = current_rsi_1h < rsi_safety_thresh
+                
+                if current_price <= price_drop_threshold and safety_rsi_ok:
+                    safety_multiplier = volume_multiplier ** safety_count
+                    safety_base = balance * (base_percent / 100.0)
+                    safety_amount_usdt = safety_base * safety_multiplier
+                    
+                    if safety_amount_usdt > balance:
+                        safety_amount_usdt = balance * 0.95
+                    
+                    if safety_amount_usdt > 1.0:
+                        safety_coins = safety_amount_usdt / current_price
+                        
+                        trades.append(Trade(
+                            timestamp=current_timestamp,
+                            action='buy',
+                            amount_coin=safety_coins,
+                            price=current_price,
+                            usdt_amount=safety_amount_usdt,
+                            reason=f'safety_order_{safety_count + 1}'
+                        ))
+                        
+                        balance -= safety_amount_usdt
+                        position_size += safety_coins
+                        total_spent += safety_amount_usdt
+                        average_entry = total_spent / position_size
+                        last_entry_price = current_price
+                        safety_count += 1
+            
+            # Check for take profit
+            if position_size > 0:
+                profit_percent = (current_price - average_entry) / average_entry * 100.0
+                
+                if profit_percent >= tp_level1:
+                    tp_sell = position_size * tp_percent1
+                    tp_usdt_gross = tp_sell * current_price
+                    tp_usdt_net = tp_usdt_gross * 0.995  # Account for fees
+                    
+                    trades.append(Trade(
+                        timestamp=current_timestamp,
+                        action='sell',
+                        amount_coin=tp_sell,
+                        price=current_price,
+                        usdt_amount=tp_usdt_net,
+                        reason='take_profit'
+                    ))
+                    
+                    balance += tp_usdt_net
+                    position_size -= tp_sell
+                    
+                    # Close deal if sold 100%
+                    if tp_percent1 >= 1.0:
+                        active_deal = False
+                        last_close_step = i
+    
+    return final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration, trades
 
 
 # Enhanced simulation with 3commas conditional filters
@@ -1457,17 +1682,6 @@ class FastOptimizer:
         return self.best_params
 
 
-@dataclass
-class Trade:
-    """Represents a single trade for visualization"""
-    timestamp: datetime
-    action: str
-    amount_coin: float
-    price: float
-    usdt_amount: float
-    reason: str
-
-
 class Visualizer:
     """Create visualizations and reports"""
 
@@ -1475,9 +1689,9 @@ class Visualizer:
     def simulate_with_trades(backtester: FastBacktester, params: StrategyParams) -> Tuple[float, float, List, List]:
         """Run simulation with ACTUAL DCA trade tracking for accurate visualization"""
         
-        print("Running DCA simulation with proper trade tracking...")
+        print("Running DCA simulation with ACTUAL strategy logic...")
         
-        # Use the enhanced simulation function directly to get actual trades
+        # Use a modified enhanced simulation that tracks actual trades
         timeframe_map = {'15m': 0, '1h': 1, '4h': 2, '1d': 3}
         supertrend_timeframe_idx = timeframe_map.get(params.supertrend_timeframe, 2)
 
@@ -1508,9 +1722,10 @@ class Visualizer:
             float(params.require_bullish_supertrend)
         ])
 
-        # Run the actual DCA simulation
-        final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
+        # Run the actual DCA simulation with trade tracking
+        final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration, actual_trades = enhanced_simulate_strategy_with_trades(
             backtester.prices,
+            backtester.timestamps,
             backtester.indicators['rsi_1h'],
             backtester.indicators['rsi_4h'],
             backtester.indicators['sma_fast_1h'],
@@ -1545,130 +1760,10 @@ class Visualizer:
         # Convert balance history to proper format
         balance_history_tuples = [(backtester.timestamps[i], balance_history[i]) for i in range(len(balance_history))]
 
-        # FIXED: Create accurate DCA trades based on the ACTUAL simulation results
-        trades = []
-        
-        # CRITICAL FIX: Use the same logic as the enhanced_simulate_strategy function
-        # to ensure trades match the actual backtest results
-        
-        # Track deal state variables (matching the simulation exactly)
-        active_deal = False
-        last_entry_price = 0.0
-        average_entry = 0.0
-        total_spent = 0.0
-        position_size = 0.0
-        safety_count = 0
-        last_close_step = -999999
-        
-        # Sample every Nth point for performance (but maintain accuracy)
-        sample_rate = max(1, len(backtester.prices) // 5000)  # Limit to 5000 points for performance
-        
-        for i in range(0, len(backtester.prices), sample_rate):
-            current_price = backtester.prices[i]
-            current_rsi = backtester.indicators['rsi_1h'][i] if i < len(backtester.indicators['rsi_1h']) else 50.0
-            current_sma_fast = backtester.indicators['sma_fast_1h'][i] if i < len(backtester.indicators['sma_fast_1h']) else current_price
-            current_sma_slow = backtester.indicators['sma_slow_1h'][i] if i < len(backtester.indicators['sma_slow_1h']) else current_price
-            
-            # FIXED: Check for new deal entry (only if no active deal) - EXACT same logic as simulation
-            if not active_deal:
-                rsi_entry_ok = current_rsi < params.rsi_entry_threshold
-                sma_ok = current_sma_fast > current_sma_slow
-                cooldown_ok = (i - last_close_step) >= 5  # Same cooldown as simulation
-                
-                if rsi_entry_ok and sma_ok and cooldown_ok:
-                    # FIXED: Base order entry with realistic amounts
-                    base_amount_usdt = backtester.initial_balance * (params.base_percent / 100.0)
-                    coin_amount = base_amount_usdt / current_price
-                    
-                    trades.append(Trade(
-                        timestamp=backtester.timestamps[i],
-                        action='buy',
-                        amount_coin=coin_amount,
-                        price=current_price,
-                        usdt_amount=base_amount_usdt,
-                        reason='base_order'
-                    ))
-                    
-                    # Update state variables (matching simulation)
-                    active_deal = True
-                    last_entry_price = current_price
-                    average_entry = current_price
-                    total_spent = base_amount_usdt
-                    position_size = coin_amount
-                    safety_count = 0
-            
-            # FIXED: Active deal management - EXACT same logic as simulation
-            elif active_deal:
-                # FIXED: Check for safety orders with correct deviation calculation
-                if safety_count < 8:  # max_safeties (same as simulation)
-                    current_deviation = params.initial_deviation
-                    for j in range(safety_count):
-                        current_deviation *= 1.5  # step_multiplier (same as simulation)
-                    
-                    price_drop_threshold = last_entry_price * (1.0 - current_deviation / 100.0)
-                    safety_rsi_ok = current_rsi < params.rsi_safety_threshold
-                    
-                    if current_price <= price_drop_threshold and safety_rsi_ok:
-                        # FIXED: Safety order with correct volume calculation
-                        safety_multiplier = 1.2 ** safety_count  # volume_multiplier (same as simulation)
-                        safety_base = backtester.initial_balance * (params.base_percent / 100.0)
-                        safety_amount_usdt = safety_base * safety_multiplier
-                        safety_coins = safety_amount_usdt / current_price
-                        
-                        trades.append(Trade(
-                            timestamp=backtester.timestamps[i],
-                            action='buy',
-                            amount_coin=safety_coins,
-                            price=current_price,
-                            usdt_amount=safety_amount_usdt,
-                            reason=f'safety_order_{safety_count + 1}'
-                        ))
-                        
-                        # FIXED: Update state variables correctly (matching simulation)
-                        position_size += safety_coins
-                        total_spent += safety_amount_usdt
-                        average_entry = total_spent / position_size  # Correct weighted average
-                        last_entry_price = current_price
-                        safety_count += 1
-                
-                # FIXED: Check for take profit with correct profit calculation
-                if position_size > 0 and average_entry > 0:
-                    profit_percent = (current_price - average_entry) / average_entry * 100.0
-                    
-                    if profit_percent >= params.tp_level1:
-                        # FIXED: Take profit - sell correct amount based on tp_percent1
-                        tp_sell_amount = position_size * (params.tp_percent1 / 100.0)
-                        tp_usdt_value = tp_sell_amount * current_price
-                        
-                        trades.append(Trade(
-                            timestamp=backtester.timestamps[i],
-                            action='sell',
-                            amount_coin=tp_sell_amount,
-                            price=current_price,
-                            usdt_amount=tp_usdt_value,
-                            reason='take_profit'
-                        ))
-                        
-                        # FIXED: Update position after take profit
-                        position_size -= tp_sell_amount
-                        
-                        # FIXED: For 1 TP system (100%), close deal completely
-                        if params.tp_percent1 >= 99.0:  # 99%+ means close entire position
-                            active_deal = False
-                            last_close_step = i
-                            position_size = 0.0
-                            safety_count = 0
-        
-        # Limit trades for visualization performance
-        if len(trades) > 200:
-            # Sample trades evenly
-            sample_rate = len(trades) // 200
-            trades = trades[::sample_rate]
-        
-        print(f"Generated {len(trades)} actual DCA trades for visualization")
+        print(f"Generated {len(actual_trades)} ACTUAL DCA trades from strategy")
         print(f"Final APY: {apy:.2f}%, Max DD: {max_drawdown:.2f}%")
         
-        return apy, max_drawdown, balance_history_tuples, trades
+        return apy, max_drawdown, balance_history_tuples, actual_trades
 
     @staticmethod
     def plot_results(balance_history: List[Tuple[datetime, float]],
@@ -1913,139 +2008,16 @@ def main():
         strategy_params = StrategyParams()
         print("Using default strategy parameters")
 
-    # For optimization, use the EXACT same simulation as during optimization
-    if args.optimize or args.drawdown_elimination:
-        print("Getting final metrics using EXACT same simulation as optimization...")
-        try:
-            # CRITICAL FIX: Use the exact same simulation method as optimization
-            timeframe_map = {'15m': 0, '1h': 1, '4h': 2, '1d': 3}
-            supertrend_timeframe_idx = timeframe_map.get(strategy_params.supertrend_timeframe, 2)
-
-            params_array = np.array([
-                strategy_params.base_percent,
-                strategy_params.initial_deviation,
-                strategy_params.trailing_deviation,
-                strategy_params.tp_level1,
-                strategy_params.tp_percent1,
-                strategy_params.rsi_entry_threshold,
-                strategy_params.rsi_safety_threshold,
-                strategy_params.fees,
-                # 3commas conditional parameters
-                float(strategy_params.sma_trend_filter),
-                float(strategy_params.sma_trend_period),
-                float(strategy_params.ema_trend_filter),
-                float(strategy_params.ema_trend_period),
-                float(strategy_params.atr_volatility_filter),
-                float(strategy_params.atr_period),
-                strategy_params.atr_multiplier,
-                float(strategy_params.higher_highs_filter),
-                float(strategy_params.higher_highs_period),
-                float(strategy_params.volume_confirmation),
-                float(strategy_params.volume_sma_period),
-                # SuperTrend parameters
-                float(strategy_params.use_supertrend_filter),
-                float(supertrend_timeframe_idx),
-                float(strategy_params.require_bullish_supertrend)
-            ])
-
-            # CRITICAL FIX: Use enhanced_simulate_strategy (same as optimization)
-            final_value, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
-                backtester.prices,
-                backtester.indicators['rsi_1h'],
-                backtester.indicators['rsi_4h'],
-                backtester.indicators['sma_fast_1h'],
-                backtester.indicators['sma_slow_1h'],
-                # Additional indicators for 3commas filters
-                backtester.indicators['sma_50'],
-                backtester.indicators['sma_100'],
-                backtester.indicators['sma_200'],
-                backtester.indicators['ema_21'],
-                backtester.indicators['ema_50'],
-                backtester.indicators['ema_100'],
-                backtester.indicators['atr_14'],
-                backtester.indicators['atr_21'],
-                backtester.indicators['atr_28'],
-                backtester.indicators['volume'],
-                backtester.indicators['vol_sma_10'],
-                backtester.indicators['vol_sma_20'],
-                backtester.indicators['vol_sma_30'],
-                # SuperTrend indicators
-                backtester.indicators['supertrend_direction_1h'],
-                backtester.indicators['supertrend_direction_4h'],
-                backtester.indicators['supertrend_direction_1d'],
-                params_array,
-                backtester.initial_balance
-            )
-
-            # Calculate APY using exact same method as optimization
-            days = (backtester.timestamps[-1] - backtester.timestamps[0]) / np.timedelta64(1, 'D')
-            years = days / 365.25
-            apy = (pow(final_value / backtester.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
-
-            # Convert balance_history to proper format for visualization
-            balance_history_for_save = [(backtester.timestamps[i], balance_history[i]) for i in range(len(balance_history))]
-
-            # Create realistic trades for visualization based on actual simulation logic
-            trades = []
-            if num_trades > 0:
-                # Create trades that represent the actual DCA strategy behavior
-                trade_frequency = max(1, len(balance_history_for_save) // min(num_trades, 200))  # Show up to 200 trades
-                trade_count = 0
-                for i in range(0, len(balance_history_for_save), trade_frequency):
-                    if trade_count >= min(num_trades, 200):
-                        break
-                    timestamp = balance_history_for_save[i][0]
-                    price = backtester.prices[min(i, len(backtester.prices)-1)]
-                    
-                    # Simulate realistic DCA trade pattern
-                    if trade_count % 10 == 0:  # Base orders (every 10th trade)
-                        action = 'buy'
-                        reason = 'base_order'
-                        amount_usdt = backtester.initial_balance * (strategy_params.base_percent / 100.0)
-                    elif trade_count % 10 < 8:  # Safety orders (trades 1-7 of each cycle)
-                        action = 'buy'
-                        reason = f'safety_order_{(trade_count % 10)}'
-                        amount_usdt = backtester.initial_balance * (strategy_params.base_percent / 100.0) * (1.2 ** (trade_count % 10))
-                    else:  # Take profit orders (trades 8-9 of each cycle)
-                        action = 'sell'
-                        reason = 'take_profit'
-                        amount_usdt = 500.0  # Estimated profit amount
-                    
-                    amount_coin = amount_usdt / price
-                    trades.append(Trade(
-                        timestamp=timestamp,
-                        action=action,
-                        amount_coin=amount_coin,
-                        price=price,
-                        usdt_amount=amount_usdt,
-                        reason=reason
-                    ))
-                    trade_count += 1
-
-            print(f"✅ EXACT MATCH: APY={apy:.2f}%, Max DD={max_drawdown:.2f}%, Trades={num_trades}")
-            print(f"   This matches the optimization results exactly!")
-
-        except Exception as e:
-            print(f"❌ Error in final metrics calculation: {e}")
-            import traceback
-            traceback.print_exc()
-            # Use optimization values if available
-            apy, max_drawdown = 0.0, 0.0
-            balance_history_for_save = [(data.index[0], backtester.initial_balance), (data.index[-1], backtester.initial_balance)]
-            trades = []
-            avg_drawdown_duration = 0
-            num_trades = 0
-    else:
-        # For non-optimization runs, do full simulation with trades for visualization
-        print("Running full simulation with trades for visualization...")
-        try:
-            apy, max_drawdown, balance_history_for_save, trades = Visualizer.simulate_with_trades(backtester, strategy_params)
-            print(f"Full simulation completed: APY={apy:.2f}%, Max DD={max_drawdown:.2f}%")
-        except Exception as e:
-            print(f"❌ Error in final simulation: {e}")
-            import traceback
-            traceback.print_exc()
-            return
+    # FIXED: Always use the proper simulation with realistic trade tracking
+    print("Running full simulation with trades for visualization...")
+    try:
+        apy, max_drawdown, balance_history_for_save, trades = Visualizer.simulate_with_trades(backtester, strategy_params)
+        print(f"Full simulation completed: APY={apy:.2f}%, Max DD={max_drawdown:.2f}%")
+    except Exception as e:
+        print(f"❌ Error in final simulation: {e}")
+        import traceback
+        traceback.print_exc()
+        return
 
     # Calculate additional metrics for results
     if not args.optimize:
