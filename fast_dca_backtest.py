@@ -440,8 +440,21 @@ def enhanced_simulate_strategy_with_trades(
             
             # Enter new deal if all conditions met
             if rsi_entry_ok and sma_ok and cooldown_ok and all_filters_ok:
-                base_amount_usdt = balance * (base_percent / 100.0)
-                if base_amount_usdt > 1.0:
+                # Pre-calculate all order sizes based on initial balance at deal start
+                deal_start_balance = balance
+                base_amount_usdt = deal_start_balance * (base_percent / 100.0)
+                
+                # Pre-calculate all safety order sizes
+                safety_order_sizes = []
+                total_required = base_amount_usdt
+                for s in range(max_safeties):
+                    safety_multiplier = volume_multiplier ** s
+                    safety_amount = deal_start_balance * (base_percent / 100.0) * safety_multiplier
+                    safety_order_sizes.append(safety_amount)
+                    total_required += safety_amount
+                
+                # Only start deal if we have enough balance for at least base order
+                if base_amount_usdt > 1.0 and base_amount_usdt <= balance:
                     coin_amount = base_amount_usdt / current_price
                     
                     trades.append(Trade(
@@ -460,6 +473,8 @@ def enhanced_simulate_strategy_with_trades(
                     last_entry_price = current_price
                     active_deal = True
                     safety_count = 0
+                    # Store pre-calculated safety order sizes for this deal
+                    deal_safety_sizes = safety_order_sizes
         
         # Active deal management
         elif active_deal:
@@ -473,10 +488,10 @@ def enhanced_simulate_strategy_with_trades(
                 safety_rsi_ok = current_rsi_1h < rsi_safety_thresh
                 
                 if current_price <= price_drop_threshold and safety_rsi_ok:
-                    safety_multiplier = volume_multiplier ** safety_count
-                    safety_base = balance * (base_percent / 100.0)
-                    safety_amount_usdt = safety_base * safety_multiplier
+                    # Use pre-calculated safety order size
+                    safety_amount_usdt = deal_safety_sizes[safety_count]
                     
+                    # Only execute if we have enough balance
                     if safety_amount_usdt > balance:
                         safety_amount_usdt = balance * 0.95
                     
@@ -608,6 +623,7 @@ def enhanced_simulate_strategy(
     trailing_active = False
     last_close_step = -999999
     num_trades = 0
+    deal_balance = 0.0  # Initialize deal balance for safety order calculations
 
     # TP level tracking (single TP target)
     tp_hit = False
@@ -710,7 +726,10 @@ def enhanced_simulate_strategy(
                 trend_filter_ok and volatility_filter_ok and
                 structure_filter_ok and volume_filter_ok and supertrend_filter_ok):
 
-                base_amount_usdt = balance * (base_percent / 100.0)
+                # Pre-calculate all order sizes based on initial balance at deal start
+                deal_start_balance = balance
+                base_amount_usdt = deal_start_balance * (base_percent / 100.0)
+                
                 if base_amount_usdt > 1.0:
                     fee_amount = base_amount_usdt * fees
                     net_amount_usdt = base_amount_usdt - fee_amount
@@ -727,6 +746,9 @@ def enhanced_simulate_strategy(
                     tp_hit = False
                     trailing_active = False
                     num_trades += 1
+                    
+                    # Store the deal start balance for safety order calculations
+                    deal_balance = deal_start_balance
 
         # 2. ACTIVE DEAL MANAGEMENT (same as before)
         if active_deal:
@@ -741,7 +763,8 @@ def enhanced_simulate_strategy(
 
                 if current_price <= price_drop_threshold and safety_rsi_ok:
                     safety_multiplier = volume_multiplier ** safety_count
-                    safety_base = balance * (base_percent / 100.0)  # FIXED: Use current balance for compounding
+                    # Use deal start balance for consistent order sizing
+                    safety_base = deal_balance * (base_percent / 100.0)
                     safety_amount_usdt = safety_base * safety_multiplier
 
                     if safety_amount_usdt > balance:
@@ -889,6 +912,7 @@ def fast_simulate_strategy(
     trailing_active = False
     last_close_step = -999999
     num_trades = 0
+    deal_balance = 0.0  # Initialize deal balance for safety order calculations
 
     # TP level tracking (single TP target)
     tp_hit = False
@@ -917,7 +941,10 @@ def fast_simulate_strategy(
             cooldown_ok = (i - last_close_step) >= 5
 
             if rsi_entry_ok and sma_ok and cooldown_ok:
-                base_amount_usdt = balance * (base_percent / 100.0)
+                # Pre-calculate all order sizes based on initial balance at deal start
+                deal_start_balance = balance
+                base_amount_usdt = deal_start_balance * (base_percent / 100.0)
+                
                 if base_amount_usdt > 1.0:
                     fee_amount = base_amount_usdt * fees
                     net_amount_usdt = base_amount_usdt - fee_amount
@@ -934,6 +961,9 @@ def fast_simulate_strategy(
                     tp_hit = False
                     trailing_active = False
                     num_trades += 1
+                    
+                    # Store the deal start balance for safety order calculations
+                    deal_balance = deal_start_balance
 
         # 2. ACTIVE DEAL MANAGEMENT
         if active_deal:
@@ -948,7 +978,8 @@ def fast_simulate_strategy(
 
                 if current_price <= price_drop_threshold and safety_rsi_ok:
                     safety_multiplier = volume_multiplier ** safety_count
-                    safety_base = balance * (base_percent / 100.0)  # FIXED: Use current balance for compounding
+                    # Use deal start balance for consistent order sizing
+                    safety_base = deal_balance * (base_percent / 100.0)
                     safety_amount_usdt = safety_base * safety_multiplier
 
                     if safety_amount_usdt > balance:
