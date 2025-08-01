@@ -1815,15 +1815,9 @@ class Visualizer:
         times, balances = zip(*balance_history)
         ax1.plot(times, balances, 'b-', linewidth=1.5, label='Portfolio Value')
 
-        # Limit trade markers to prevent overcrowding
-        max_trade_markers = 500
-        if len(trades) > max_trade_markers:
-            # Sample trades evenly
-            trade_indices = np.linspace(0, len(trades)-1, max_trade_markers, dtype=int)
-            sampled_trades = [trades[i] for i in trade_indices]
-            print(f"Showing {len(sampled_trades)} trade markers (sampled from {len(trades)} total)")
-        else:
-            sampled_trades = trades
+        # Show ALL trade markers as requested
+        sampled_trades = trades
+        print(f"Showing ALL {len(trades)} trade markers on the chart")
 
         # Add trade markers
         buy_times = []
