@@ -55,6 +55,14 @@ class OptimizationRanges:
     # Volume confirmation (available on 3commas)
     volume_confirmation: List[bool] = None     # Require volume confirmation
     volume_sma_period: List[int] = None        # Volume SMA period for comparison
+    
+    # === SUPERTREND DRAWDOWN ELIMINATION (NEW) ===
+    use_supertrend_filter: List[bool] = None   # Enable SuperTrend trend filtering
+    supertrend_timeframe: List[str] = None     # Timeframe for SuperTrend ('1h', '4h', '1d')
+    supertrend_period: List[int] = None        # SuperTrend ATR period
+    supertrend_multiplier: List[float] = None  # SuperTrend multiplier
+    require_bullish_supertrend: List[bool] = None  # Only enter when SuperTrend is bullish
+    max_acceptable_drawdown: float = 15.0      # Maximum acceptable drawdown % (fixed)
 
     # === FIXED PARAMETERS ===
     fees: float = 0.075                       # Trading fees %
@@ -133,6 +141,22 @@ class OptimizationRanges:
 
         if self.volume_sma_period is None:
             self.volume_sma_period = [10, 20]  # Removed 30 (too restrictive)
+        
+        # SuperTrend drawdown elimination settings
+        if self.use_supertrend_filter is None:
+            self.use_supertrend_filter = [True, False]  # 50% chance enabled for testing
+        
+        if self.supertrend_timeframe is None:
+            self.supertrend_timeframe = ['1h', '4h', '1d']
+        
+        if self.supertrend_period is None:
+            self.supertrend_period = [7, 10, 14, 21]  # ATR periods to test
+        
+        if self.supertrend_multiplier is None:
+            self.supertrend_multiplier = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  # Multipliers to test
+        
+        if self.require_bullish_supertrend is None:
+            self.require_bullish_supertrend = [True, False]  # Test both modes
 
 
 @dataclass
@@ -181,6 +205,14 @@ class StrategyParams:
     # Volume confirmation (available on 3commas)
     volume_confirmation: bool = False        # Require volume confirmation
     volume_sma_period: int = 20              # Volume SMA period for comparison
+    
+    # === SUPERTREND DRAWDOWN ELIMINATION (NEW) ===
+    use_supertrend_filter: bool = False      # Enable SuperTrend trend filtering for drawdown elimination
+    supertrend_timeframe: str = '4h'         # Timeframe for SuperTrend analysis ('1h', '4h', '1d')
+    supertrend_period: int = 10              # SuperTrend ATR period (optimizable 7-21)
+    supertrend_multiplier: float = 3.0       # SuperTrend multiplier (optimizable 1.0-5.0)
+    require_bullish_supertrend: bool = True  # Only enter when SuperTrend is bullish
+    max_acceptable_drawdown: float = 15.0    # Maximum acceptable drawdown % (stop optimization if exceeded)
 
     # === FIXED PARAMETERS ===
     fees: float = 0.075                      # Trading fees %
@@ -326,6 +358,14 @@ class OptimizationConfig:
             higher_highs_period=trial.suggest_categorical('higher_highs_period', self.ranges.higher_highs_period),
             volume_confirmation=trial.suggest_categorical('volume_confirmation', self.ranges.volume_confirmation),
             volume_sma_period=trial.suggest_categorical('volume_sma_period', self.ranges.volume_sma_period),
+            
+            # SuperTrend drawdown elimination
+            use_supertrend_filter=trial.suggest_categorical('use_supertrend_filter', self.ranges.use_supertrend_filter),
+            supertrend_timeframe=trial.suggest_categorical('supertrend_timeframe', self.ranges.supertrend_timeframe),
+            supertrend_period=trial.suggest_categorical('supertrend_period', self.ranges.supertrend_period),
+            supertrend_multiplier=trial.suggest_categorical('supertrend_multiplier', self.ranges.supertrend_multiplier),
+            require_bullish_supertrend=trial.suggest_categorical('require_bullish_supertrend', self.ranges.require_bullish_supertrend),
+            max_acceptable_drawdown=self.ranges.max_acceptable_drawdown,
 
             # Fixed
             fees=self.ranges.fees

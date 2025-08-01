@@ -70,6 +70,95 @@ class FastDataProcessor:
         df.sort_index(inplace=True)
         return df
     
+    @staticmethod
+    def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> Tuple[np.ndarray, np.ndarray]:
+        """Fast SuperTrend calculation"""
+        try:
+            # Calculate ATR
+            atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range()
+            
+            if atr.isna().all():
+                # Fallback calculation
+                high_low = df['high'] - df['low']
+                high_close = (df['high'] - df['close'].shift()).abs()
+                low_close = (df['low'] - df['close'].shift()).abs()
+                true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+                atr = true_range.rolling(window=period).mean()
+            
+            # Calculate basic upper and lower bands
+            hl2 = (df['high'] + df['low']) / 2.0
+            upper_band = hl2 + (multiplier * atr)
+            lower_band = hl2 - (multiplier * atr)
+            
+            # Initialize SuperTrend arrays
+            supertrend_values = np.full(len(df), np.nan)
+            trend_direction = np.full(len(df), 1)  # 1 for up, -1 for down
+            
+            # Fill initial values
+            if len(df) > 0:
+                first_valid_idx = atr.first_valid_index()
+                if first_valid_idx is not None:
+                    start_idx = df.index.get_loc(first_valid_idx)
+                    supertrend_values[start_idx] = lower_band.iloc[start_idx]
+                    trend_direction[start_idx] = 1
+                    
+                    # Calculate SuperTrend iteratively
+                    for i in range(start_idx + 1, len(df)):
+                        prev_close = df['close'].iloc[i-1]
+                        curr_close = df['close'].iloc[i]
+                        prev_supertrend = supertrend_values[i-1]
+                        prev_trend = trend_direction[i-1]
+                        
+                        curr_upper = upper_band.iloc[i]
+                        curr_lower = lower_band.iloc[i]
+                        
+                        # Upper band calculation
+                        if not np.isnan(prev_close) and not np.isnan(prev_supertrend):
+                            if curr_upper < prev_supertrend or prev_close > prev_supertrend:
+                                final_upper = curr_upper
+                            else:
+                                final_upper = prev_supertrend
+                        else:
+                            final_upper = curr_upper
+                        
+                        # Lower band calculation  
+                        if not np.isnan(prev_close) and not np.isnan(prev_supertrend):
+                            if curr_lower > prev_supertrend or prev_close < prev_supertrend:
+                                final_lower = curr_lower
+                            else:
+                                final_lower = prev_supertrend
+                        else:
+                            final_lower = curr_lower
+                        
+                        # Determine trend direction
+                        if prev_trend == 1:
+                            if curr_close <= final_lower:
+                                trend_direction[i] = -1
+                                supertrend_values[i] = final_upper
+                            else:
+                                trend_direction[i] = 1
+                                supertrend_values[i] = final_lower
+                        else:  # prev_trend == -1
+                            if curr_close >= final_upper:
+                                trend_direction[i] = 1
+                                supertrend_values[i] = final_lower
+                            else:
+                                trend_direction[i] = -1
+                                supertrend_values[i] = final_upper
+            
+            # Fill any remaining NaN values
+            mask = np.isnan(supertrend_values)
+            if mask.any():
+                supertrend_values[mask] = df['close'].iloc[mask].values
+                trend_direction[mask] = 1
+            
+            return supertrend_values, trend_direction
+            
+        except Exception as e:
+            print(f"SuperTrend calculation failed: {e}")
+            # Return neutral values
+            return df['close'].values, np.ones(len(df))
+
     def calculate_indicators_fast(self, df: pd.DataFrame) -> Dict[str, np.ndarray]:
         """Vectorized indicator calculation with caching"""
         cache_key = f"{len(df)}_{df.index[0]}_{df.index[-1]}"
@@ -77,16 +166,26 @@ class FastDataProcessor:
         if cache_key in self._indicator_cache:
             return self._indicator_cache[cache_key]
         
+        print(f"Calculating indicators for {len(df)} data points...")
+        
         # Vectorized resampling - do once and reuse
         df_1h = df.resample('1H').agg({
             'open': 'first', 'high': 'max', 'low': 'min', 
             'close': 'last', 'vol': 'sum'
         }).dropna()
+        print(f"  1H data: {len(df_1h)} candles")
         
         df_4h = df.resample('4H').agg({
             'open': 'first', 'high': 'max', 'low': 'min', 
             'close': 'last', 'vol': 'sum'
         }).dropna()
+        print(f"  4H data: {len(df_4h)} candles")
+        
+        df_1d = df.resample('1D').agg({
+            'open': 'first', 'high': 'max', 'low': 'min', 
+            'close': 'last', 'vol': 'sum'
+        }).dropna()
+        print(f"  1D data: {len(df_1d)} candles")
         
         # Calculate indicators on resampled data
         rsi_1h = ta.momentum.RSIIndicator(df_1h['close'], window=14).rsi()
@@ -112,6 +211,12 @@ class FastDataProcessor:
         vol_sma_10_1h = ta.trend.SMAIndicator(df_1h['vol'], window=10).sma_indicator()
         vol_sma_20_1h = ta.trend.SMAIndicator(df_1h['vol'], window=20).sma_indicator()
         vol_sma_30_1h = ta.trend.SMAIndicator(df_1h['vol'], window=30).sma_indicator()
+        
+        print("  Computing SuperTrend indicators...")
+        # SuperTrend indicators for multiple timeframes (DRAWDOWN ELIMINATION)
+        supertrend_1h, supertrend_direction_1h = FastDataProcessor.calculate_supertrend(df_1h, 10, 3.0)
+        supertrend_4h, supertrend_direction_4h = FastDataProcessor.calculate_supertrend(df_4h, 10, 3.0)
+        supertrend_1d, supertrend_direction_1d = FastDataProcessor.calculate_supertrend(df_1d, 10, 3.0)
         
         # Forward-fill to original timeframe using pandas reindex
         indicators = {
@@ -139,7 +244,15 @@ class FastDataProcessor:
             'vol_sma_30': vol_sma_30_1h.reindex(df.index, method='ffill').fillna(method='ffill').values,
             
             # Volume data
-            'volume': df['vol'].values
+            'volume': df['vol'].values,
+            
+            # SuperTrend indicators (DRAWDOWN ELIMINATION)
+            'supertrend_1h': pd.Series(supertrend_1h, index=df_1h.index).reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'supertrend_direction_1h': pd.Series(supertrend_direction_1h, index=df_1h.index).reindex(df.index, method='ffill').fillna(1.0).values,
+            'supertrend_4h': pd.Series(supertrend_4h, index=df_4h.index).reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'supertrend_direction_4h': pd.Series(supertrend_direction_4h, index=df_4h.index).reindex(df.index, method='ffill').fillna(1.0).values,
+            'supertrend_1d': pd.Series(supertrend_1d, index=df_1d.index).reindex(df.index, method='ffill').fillna(method='ffill').values,
+            'supertrend_direction_1d': pd.Series(supertrend_direction_1d, index=df_1d.index).reindex(df.index, method='ffill').fillna(1.0).values,
         }
         
         # Cache the results
@@ -171,6 +284,10 @@ def enhanced_simulate_strategy(
     vol_sma_10: np.ndarray,
     vol_sma_20: np.ndarray,
     vol_sma_30: np.ndarray,
+    # SuperTrend indicators for drawdown elimination
+    supertrend_direction_1h: np.ndarray,
+    supertrend_direction_4h: np.ndarray,
+    supertrend_direction_1d: np.ndarray,
     params_array: np.ndarray,
     initial_balance: float = 10000.0
 ) -> Tuple[float, float, int, np.ndarray, float]:
@@ -203,6 +320,11 @@ def enhanced_simulate_strategy(
     higher_highs_period = int(params_array[18])  # 10, 20, or 30
     volume_confirmation = bool(params_array[19])
     volume_sma_period = int(params_array[20])  # 10, 20, or 30
+    
+    # Unpack SuperTrend drawdown elimination parameters
+    use_supertrend_filter = bool(params_array[21])
+    supertrend_timeframe = int(params_array[22])  # 0=1h, 1=4h, 2=1d
+    require_bullish_supertrend = bool(params_array[23])
     
     # Constants (matching original)
     step_multiplier = 1.5
@@ -258,6 +380,7 @@ def enhanced_simulate_strategy(
             volatility_filter_ok = True
             structure_filter_ok = True
             volume_filter_ok = True
+            supertrend_filter_ok = True
             
             # SMA trend filter
             if sma_trend_filter:
@@ -310,10 +433,21 @@ def enhanced_simulate_strategy(
                 current_volume = volume[i] if i < len(volume) else 0.0
                 volume_filter_ok = current_volume > avg_volume * 0.8  # At least 80% of average volume
             
-            # Combined entry condition with all filters
+            # SuperTrend filter for drawdown elimination
+            if use_supertrend_filter and require_bullish_supertrend:
+                if supertrend_timeframe == 0:  # 1h
+                    supertrend_direction = supertrend_direction_1h[i] if i < len(supertrend_direction_1h) else 1.0
+                elif supertrend_timeframe == 1:  # 4h
+                    supertrend_direction = supertrend_direction_4h[i] if i < len(supertrend_direction_4h) else 1.0
+                else:  # 1d
+                    supertrend_direction = supertrend_direction_1d[i] if i < len(supertrend_direction_1d) else 1.0
+                
+                supertrend_filter_ok = supertrend_direction > 0  # 1 = bullish, -1 = bearish
+            
+            # Combined entry condition with all filters (including SuperTrend)
             if (rsi_entry_ok and sma_ok and cooldown_ok and 
                 trend_filter_ok and volatility_filter_ok and 
-                structure_filter_ok and volume_filter_ok):
+                structure_filter_ok and volume_filter_ok and supertrend_filter_ok):
                 
                 base_amount_usdt = balance * (base_percent / 100.0)
                 if base_amount_usdt > 1.0:
@@ -888,7 +1022,11 @@ class FastOptimizer:
         params = self._suggest_params(trial)
         
         try:
-            # Pack parameters including 3commas conditional filters
+            # Pack parameters including 3commas conditional filters and SuperTrend
+            # Map timeframe string to index for numba
+            timeframe_map = {'1h': 0, '4h': 1, '1d': 2}
+            supertrend_timeframe_idx = timeframe_map.get(params.supertrend_timeframe, 1)  # Default to 4h
+            
             params_array = np.array([
                 params.base_percent,
                 params.initial_deviation, 
@@ -911,7 +1049,11 @@ class FastOptimizer:
                 float(params.higher_highs_filter),
                 float(params.higher_highs_period),
                 float(params.volume_confirmation),
-                float(params.volume_sma_period)
+                float(params.volume_sma_period),
+                # SuperTrend drawdown elimination parameters
+                float(params.use_supertrend_filter),
+                float(supertrend_timeframe_idx),
+                float(params.require_bullish_supertrend)
             ])
             
             final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
@@ -934,6 +1076,10 @@ class FastOptimizer:
                 self.backtester.indicators['vol_sma_10'],
                 self.backtester.indicators['vol_sma_20'],
                 self.backtester.indicators['vol_sma_30'],
+                # SuperTrend indicators for drawdown elimination
+                self.backtester.indicators['supertrend_direction_1h'],
+                self.backtester.indicators['supertrend_direction_4h'],
+                self.backtester.indicators['supertrend_direction_1d'],
                 params_array,
                 self.backtester.initial_balance
             )
@@ -996,6 +1142,258 @@ class FastOptimizer:
                 pbar.update(1)
             
             study.optimize(self.objective, n_trials=n_trials, callbacks=[callback])
+        
+        return self.best_params
+    
+    def optimize_with_drawdown_elimination(self, trend_trials: int = 50, dca_trials: int = 50) -> StrategyParams:
+        """Two-phase optimization: 1) Eliminate drawdown with trend filtering, 2) Optimize DCA parameters"""
+        
+        print("=" * 80)
+        print("🚀 FAST DUAL-PHASE OPTIMIZATION FOR DRAWDOWN ELIMINATION")
+        print("=" * 80)
+        print("Phase 1: Optimizing trend filtering (SuperTrend + 3commas filters)")
+        print("Phase 2: Optimizing DCA parameters with trend filtering enabled")
+        print()
+        
+        # PHASE 1: TREND FILTERING OPTIMIZATION
+        print("🔄 PHASE 1: SUPERTREND & TREND FILTERING OPTIMIZATION")
+        print("-" * 50)
+        print(f"Goal: Find trend parameters that keep drawdown below 15%")
+        print(f"Trials: {trend_trials}")
+        print(f"Focus: SuperTrend, SMA/EMA filters, volatility filters")
+        print()
+        
+        # Create trend-focused optimization ranges
+        from strategy_config import OptimizationRanges
+        trend_ranges = OptimizationRanges(
+            # Fix DCA parameters during phase 1
+            base_percent=[2.0],
+            initial_deviation=[3.0],
+            tp_level1=[3.0],
+            tp_percent1=[50.0],
+            tp_percent2=[30.0], 
+            tp_percent3=[20.0],
+            trailing_deviation=[2.0],
+            rsi_entry_threshold=[40.0],
+            rsi_safety_threshold=[30.0],
+            
+            # Focus on trend filtering parameters
+            use_supertrend_filter=[True],  # Always enabled in phase 1
+            supertrend_timeframe=['1h', '4h', '1d'],
+            supertrend_period=[7, 10, 14, 21],
+            supertrend_multiplier=[1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0],
+            require_bullish_supertrend=[True, False],
+            
+            # Test 3commas filters more aggressively
+            sma_trend_filter=[True, False],
+            sma_trend_period=[50, 100, 200],
+            ema_trend_filter=[True, False],
+            ema_trend_period=[21, 50, 100],
+            atr_volatility_filter=[True, False],
+            atr_period=[14, 21, 28],
+            atr_multiplier=[1.5, 2.0, 2.5, 3.0, 4.0, 5.0],
+        )
+        
+        trend_optimizer = FastOptimizer(self.backtester, OptimizationConfig(trend_ranges))
+        
+        # Modified objective for phase 1 - strict drawdown enforcement
+        def phase1_objective(trial):
+            params = trend_optimizer._suggest_params(trial)
+            
+            try:
+                # Pack parameters for simulation
+                timeframe_map = {'1h': 0, '4h': 1, '1d': 2}
+                supertrend_timeframe_idx = timeframe_map.get(params.supertrend_timeframe, 1)
+                
+                params_array = np.array([
+                    params.base_percent, params.initial_deviation, params.trailing_deviation,
+                    params.tp_level1, params.tp_percent1, params.tp_percent2, params.tp_percent3,
+                    params.rsi_entry_threshold, params.rsi_safety_threshold, params.fees,
+                    float(params.sma_trend_filter), float(params.sma_trend_period),
+                    float(params.ema_trend_filter), float(params.ema_trend_period),
+                    float(params.atr_volatility_filter), float(params.atr_period), params.atr_multiplier,
+                    float(params.higher_highs_filter), float(params.higher_highs_period),
+                    float(params.volume_confirmation), float(params.volume_sma_period),
+                    float(params.use_supertrend_filter), float(supertrend_timeframe_idx),
+                    float(params.require_bullish_supertrend)
+                ])
+                
+                final_balance, max_drawdown, num_trades, _, avg_dd_duration = enhanced_simulate_strategy(
+                    self.backtester.prices, self.backtester.indicators['rsi_1h'],
+                    self.backtester.indicators['rsi_4h'], self.backtester.indicators['sma_fast_1h'], 
+                    self.backtester.indicators['sma_slow_1h'], self.backtester.indicators['sma_50'],
+                    self.backtester.indicators['sma_100'], self.backtester.indicators['sma_200'],
+                    self.backtester.indicators['ema_21'], self.backtester.indicators['ema_50'],
+                    self.backtester.indicators['ema_100'], self.backtester.indicators['atr_14'],
+                    self.backtester.indicators['atr_21'], self.backtester.indicators['atr_28'],
+                    self.backtester.indicators['volume'], self.backtester.indicators['vol_sma_10'],
+                    self.backtester.indicators['vol_sma_20'], self.backtester.indicators['vol_sma_30'],
+                    self.backtester.indicators['supertrend_direction_1h'],
+                    self.backtester.indicators['supertrend_direction_4h'],
+                    self.backtester.indicators['supertrend_direction_1d'],
+                    params_array, self.backtester.initial_balance
+                )
+                
+                # Calculate APY
+                days = (self.backtester.timestamps[-1] - self.backtester.timestamps[0]) / np.timedelta64(1, 'D')
+                years = days / 365.25
+                apy = (pow(final_balance / self.backtester.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
+                
+                # STRICT drawdown enforcement in phase 1
+                if max_drawdown > params.max_acceptable_drawdown:
+                    return -1000 - max_drawdown  # Heavy penalty
+                
+                # Focus heavily on drawdown reduction in phase 1 (70% weight)
+                fitness = 0.3 * apy - 0.7 * max_drawdown
+                
+                # Update trend-focused best results
+                if fitness > trend_optimizer.best_fitness:
+                    trend_optimizer.best_fitness = fitness
+                    trend_optimizer.best_apy = apy
+                    trend_optimizer.best_drawdown = max_drawdown
+                    trend_optimizer.best_params = params
+                
+                return fitness
+                
+            except Exception as e:
+                return -1000
+        
+        # Run phase 1 optimization
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        study_phase1 = optuna.create_study(direction='maximize')
+        
+        with tqdm(total=trend_trials, desc="Phase 1: Trend optimization", 
+                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
+            def callback1(study, trial):
+                pbar.set_description(f"Phase 1: Best APY={trend_optimizer.best_apy:.1f}% DD={trend_optimizer.best_drawdown:.1f}%")
+                pbar.update(1)
+            
+            study_phase1.optimize(phase1_objective, n_trials=trend_trials, callbacks=[callback1])
+        
+        phase1_best = trend_optimizer.best_params
+        print()
+        print("✅ PHASE 1 COMPLETE!")
+        print(f"Best drawdown achieved: {trend_optimizer.best_drawdown:.2f}%")
+        print(f"APY with trend filtering: {trend_optimizer.best_apy:.2f}%")
+        print(f"SuperTrend: {phase1_best.supertrend_timeframe}, period={phase1_best.supertrend_period}, mult={phase1_best.supertrend_multiplier}")
+        print(f"Filters: SMA={phase1_best.sma_trend_filter}, EMA={phase1_best.ema_trend_filter}, ATR={phase1_best.atr_volatility_filter}")
+        print()
+        
+        # PHASE 2: DCA PARAMETERS OPTIMIZATION
+        print("🔄 PHASE 2: DCA PARAMETERS OPTIMIZATION")
+        print("-" * 50)
+        print(f"Goal: Maximize APY while maintaining drawdown control")
+        print(f"Trials: {dca_trials}")
+        print("Trend filtering: ENABLED with phase 1 parameters")
+        print()
+        
+        # Reset optimizer for phase 2
+        self.best_fitness = -1000
+        self.best_apy = 0
+        self.best_drawdown = 100
+        
+        # Modified objective for phase 2 - optimize DCA with fixed trend parameters
+        def phase2_objective(trial):
+            params = self._suggest_params(trial)
+            
+            # Override with best trend parameters from phase 1
+            params.use_supertrend_filter = phase1_best.use_supertrend_filter
+            params.supertrend_timeframe = phase1_best.supertrend_timeframe
+            params.supertrend_period = phase1_best.supertrend_period
+            params.supertrend_multiplier = phase1_best.supertrend_multiplier
+            params.require_bullish_supertrend = phase1_best.require_bullish_supertrend
+            params.sma_trend_filter = phase1_best.sma_trend_filter
+            params.sma_trend_period = phase1_best.sma_trend_period
+            params.ema_trend_filter = phase1_best.ema_trend_filter
+            params.ema_trend_period = phase1_best.ema_trend_period
+            params.atr_volatility_filter = phase1_best.atr_volatility_filter
+            params.atr_period = phase1_best.atr_period
+            params.atr_multiplier = phase1_best.atr_multiplier
+            
+            try:
+                # Pack parameters for simulation
+                timeframe_map = {'1h': 0, '4h': 1, '1d': 2}
+                supertrend_timeframe_idx = timeframe_map.get(params.supertrend_timeframe, 1)
+                
+                params_array = np.array([
+                    params.base_percent, params.initial_deviation, params.trailing_deviation,
+                    params.tp_level1, params.tp_percent1, params.tp_percent2, params.tp_percent3,
+                    params.rsi_entry_threshold, params.rsi_safety_threshold, params.fees,
+                    float(params.sma_trend_filter), float(params.sma_trend_period),
+                    float(params.ema_trend_filter), float(params.ema_trend_period),
+                    float(params.atr_volatility_filter), float(params.atr_period), params.atr_multiplier,
+                    float(params.higher_highs_filter), float(params.higher_highs_period),
+                    float(params.volume_confirmation), float(params.volume_sma_period),
+                    float(params.use_supertrend_filter), float(supertrend_timeframe_idx),
+                    float(params.require_bullish_supertrend)
+                ])
+                
+                final_balance, max_drawdown, num_trades, _, avg_dd_duration = enhanced_simulate_strategy(
+                    self.backtester.prices, self.backtester.indicators['rsi_1h'],
+                    self.backtester.indicators['rsi_4h'], self.backtester.indicators['sma_fast_1h'], 
+                    self.backtester.indicators['sma_slow_1h'], self.backtester.indicators['sma_50'],
+                    self.backtester.indicators['sma_100'], self.backtester.indicators['sma_200'],
+                    self.backtester.indicators['ema_21'], self.backtester.indicators['ema_50'],
+                    self.backtester.indicators['ema_100'], self.backtester.indicators['atr_14'],
+                    self.backtester.indicators['atr_21'], self.backtester.indicators['atr_28'],
+                    self.backtester.indicators['volume'], self.backtester.indicators['vol_sma_10'],
+                    self.backtester.indicators['vol_sma_20'], self.backtester.indicators['vol_sma_30'],
+                    self.backtester.indicators['supertrend_direction_1h'],
+                    self.backtester.indicators['supertrend_direction_4h'],
+                    self.backtester.indicators['supertrend_direction_1d'],
+                    params_array, self.backtester.initial_balance
+                )
+                
+                # Calculate APY
+                days = (self.backtester.timestamps[-1] - self.backtester.timestamps[0]) / np.timedelta64(1, 'D')
+                years = days / 365.25
+                apy = (pow(final_balance / self.backtester.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
+                
+                # Still enforce drawdown limit but be slightly more lenient in phase 2
+                if max_drawdown > 20.0:  # Slightly higher threshold for phase 2
+                    return -1000 - max_drawdown
+                
+                # Balance APY and drawdown in phase 2
+                fitness = 0.6 * apy - 0.4 * max_drawdown
+                
+                # Update final best results
+                if fitness > self.best_fitness:
+                    self.best_fitness = fitness
+                    self.best_apy = apy
+                    self.best_drawdown = max_drawdown
+                    self.best_params = params
+                
+                return fitness
+                
+            except Exception as e:
+                return -1000
+        
+        # Run phase 2 optimization
+        study_phase2 = optuna.create_study(direction='maximize')
+        
+        with tqdm(total=dca_trials, desc="Phase 2: DCA optimization", 
+                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
+            def callback2(study, trial):
+                pbar.set_description(f"Phase 2: Best APY={self.best_apy:.1f}% DD={self.best_drawdown:.1f}%")
+                pbar.update(1)
+            
+            study_phase2.optimize(phase2_objective, n_trials=dca_trials, callbacks=[callback2])
+        
+        print()
+        print("✅ PHASE 2 COMPLETE!")
+        print("=" * 80)
+        print("🏆 FAST DUAL-PHASE OPTIMIZATION RESULTS")
+        print("=" * 80)
+        print(f"Final APY: {self.best_apy:.2f}%")
+        print(f"Final Max Drawdown: {self.best_drawdown:.2f}%")
+        print(f"Total Trials: {trend_trials + dca_trials}")
+        
+        drawdown_status = "✅ ELIMINATED" if self.best_drawdown <= 15.0 else f"⚠️  REDUCED to {self.best_drawdown:.1f}%"
+        print(f"Drawdown Status: {drawdown_status}")
+        
+        print()
+        print("📝 Note: Results will be saved after final simulation with optimized parameters")
+        print()
         
         return self.best_params
 
@@ -1207,6 +1605,12 @@ def main():
                        help='Market type for optimization ranges')
     parser.add_argument('--preset', choices=['conservative', 'aggressive', 'bull_market', 'bear_market', 'scalping'], 
                        help='Use preset strategy parameters')
+    parser.add_argument('--drawdown_elimination', action='store_true',
+                       help='Use dual-phase optimization to eliminate huge drawdown periods first')
+    parser.add_argument('--trend_trials', type=int, default=50,
+                       help='Number of trials for trend filtering optimization (phase 1)')
+    parser.add_argument('--dca_trials', type=int, default=50,
+                       help='Number of trials for DCA parameters optimization (phase 2)')
     
     args = parser.parse_args()
     
@@ -1243,7 +1647,7 @@ def main():
         strategy_params = preset_map[args.preset]()
         print(f"Using {args.preset} preset strategy")
         
-    elif args.optimize:
+    elif args.optimize or args.drawdown_elimination:
         # Choose optimization ranges based on market type
         from strategy_config import MarketOptimizationRanges
         
@@ -1261,7 +1665,19 @@ def main():
             print("Using DEFAULT optimization ranges")
         
         optimizer = FastOptimizer(backtester, optimization_config)
-        best_params = optimizer.optimize_fast(args.trials)
+        
+        if args.drawdown_elimination:
+            # Use dual-phase optimization for drawdown elimination
+            print("🎯 FAST DRAWDOWN ELIMINATION MODE ACTIVATED")
+            print("This will focus on eliminating huge drawdown periods first, then optimize APY")
+            print()
+            best_params = optimizer.optimize_with_drawdown_elimination(
+                trend_trials=args.trend_trials, 
+                dca_trials=args.dca_trials
+            )
+        else:
+            best_params = optimizer.optimize_fast(args.trials)
+        
         print(f"Optimization completed! Best params: {best_params}")
         
         # best_params is already a StrategyParams object
@@ -1271,7 +1687,7 @@ def main():
         print("Using default strategy parameters")
     
     # For optimization, just get the key metrics without complex visualization
-    if args.optimize:
+    if args.optimize or args.drawdown_elimination:
         print("Getting final metrics from optimization...")
         try:
             # Get final performance metrics using the fast simulation
