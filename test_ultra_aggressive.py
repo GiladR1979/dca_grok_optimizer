@@ -41,7 +41,7 @@ def test_ultra_aggressive():
     print(f"  Initial Deviation: {params.initial_deviation}%")
     print(f"  Trailing Deviation: {params.trailing_deviation}%")
     print(f"  Take Profit Level 1: {params.tp_level1}%")
-    print(f"  TP Percentages: {params.tp_percent1}% / {params.tp_percent2}% / {params.tp_percent3}%")
+    print(f"  TP Percentage: {params.tp_percent1}% (Single TP target)")
     print(f"  RSI Entry Threshold: {params.rsi_entry_threshold}")
     print(f"  RSI Safety Threshold: {params.rsi_safety_threshold}")
     
@@ -96,8 +96,6 @@ def test_ultra_aggressive():
             'trailing_deviation': params.trailing_deviation,
             'tp_level1': params.tp_level1,
             'tp_percent1': params.tp_percent1,
-            'tp_percent2': params.tp_percent2,
-            'tp_percent3': params.tp_percent3,
             'rsi_entry_threshold': params.rsi_entry_threshold,
             'rsi_safety_threshold': params.rsi_safety_threshold
         }
