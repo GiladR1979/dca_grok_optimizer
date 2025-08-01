@@ -22,11 +22,9 @@ class OptimizationRanges:
     step_multiplier: List[float] = None        # Safety order step scaling
     max_safeties: List[int] = None            # Maximum safety orders
 
-    # === TAKE PROFIT LEVELS ===
-    tp_level1: List[float] = None             # First TP level %
-    tp_percent1: List[float] = None           # % to sell at TP1
-    tp_percent2: List[float] = None           # % to sell at TP2
-    tp_percent3: List[float] = None           # % to sell at TP3
+    # === TAKE PROFIT LEVELS === (Single TP target only)
+    tp_level1: List[float] = None             # TP level %
+    tp_percent1: List[float] = None           # % to sell at TP (typically 100%)
 
     # === TRAILING STOP ===
     trailing_deviation: List[float] = None     # Trailing stop %
@@ -88,13 +86,7 @@ class OptimizationRanges:
             self.tp_level1 = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 10.0]
 
         if self.tp_percent1 is None:
-            self.tp_percent1 = [50]
-
-        if self.tp_percent2 is None:
-            self.tp_percent2 = [30]
-
-        if self.tp_percent3 is None:
-            self.tp_percent3 = [20]
+            self.tp_percent1 = [100]  # Single TP target - sell entire position
 
         if self.trailing_deviation is None:
             self.trailing_deviation = [0.1, 0.2, 0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
@@ -147,7 +139,7 @@ class OptimizationRanges:
             self.use_supertrend_filter = [True, False]  # 50% chance enabled for testing
         
         if self.supertrend_timeframe is None:
-            self.supertrend_timeframe = ['1h', '4h', '1d']
+            self.supertrend_timeframe = ['15m', '1h', '4h', '1d']
         
         if self.supertrend_period is None:
             self.supertrend_period = [7, 10, 14, 21]  # ATR periods to test
@@ -172,11 +164,9 @@ class StrategyParams:
     step_multiplier: float = 1.5             # Safety order step scaling
     max_safeties: int = 8                    # Maximum safety orders
 
-    # === TAKE PROFIT LEVELS ===
-    tp_level1: float = 3.0                   # First TP level %
-    tp_percent1: float = 50.0                # % to sell at TP1
-    tp_percent2: float = 30.0                # % to sell at TP2
-    tp_percent3: float = 20.0                # % to sell at TP3
+    # === TAKE PROFIT LEVELS === (Single TP target only)
+    tp_level1: float = 3.0                   # TP level %
+    tp_percent1: float = 100.0               # % to sell at TP (100% = close entire position)
 
     # === TRAILING STOP ===
     trailing_deviation: float = 3.0          # Trailing stop %
@@ -222,13 +212,7 @@ class StrategyParams:
         if self.trailing_deviation > self.tp_level1:
             self.trailing_deviation = self.tp_level1
 
-    @property
-    def tp_level2(self) -> float:
-        return self.tp_level1 * 2
-
-    @property
-    def tp_level3(self) -> float:
-        return self.tp_level1 * 3
+    # Removed tp_level2 and tp_level3 properties - using single TP target only
 
 
 class StrategyPresets:
@@ -241,7 +225,7 @@ class StrategyPresets:
             base_percent=1.0,
             initial_deviation=3.0,
             tp_level1=3.0,
-            tp_percent1=50.0,
+            tp_percent1=100.0,  # Single TP - sell all
             rsi_entry_threshold=35.0,
             trailing_deviation=2.0
         )
@@ -253,9 +237,7 @@ class StrategyPresets:
             base_percent=5.0,
             initial_deviation=2.0,
             tp_level1=5.0,
-            tp_percent1=25.0,
-            tp_percent2=25.0,
-            tp_percent3=25.0,  # Keep 25% running
+            tp_percent1=100.0,  # Single TP - sell all
             rsi_entry_threshold=55.0,
             trailing_deviation=3.0
         )
@@ -267,9 +249,7 @@ class StrategyPresets:
             base_percent=3.0,
             initial_deviation=1.5,
             tp_level1=8.0,      # Let profits run longer
-            tp_percent1=20.0,   # Sell less on TPs
-            tp_percent2=20.0,
-            tp_percent3=30.0,   # Keep 30% forever
+            tp_percent1=100.0,  # Single TP - sell all
             rsi_entry_threshold=60.0,
             rsi_safety_threshold=50.0,
             trailing_deviation=4.0
@@ -282,9 +262,7 @@ class StrategyPresets:
             base_percent=2.0,
             initial_deviation=2.5,
             tp_level1=2.0,      # Take profits quickly
-            tp_percent1=60.0,   # Sell more on TPs
-            tp_percent2=35.0,
-            tp_percent3=5.0,    # Keep very little
+            tp_percent1=100.0,  # Single TP - sell all
             rsi_entry_threshold=40.0,
             rsi_safety_threshold=25.0,
             trailing_deviation=1.5
@@ -297,9 +275,7 @@ class StrategyPresets:
             base_percent=1.5,
             initial_deviation=1.0,
             tp_level1=1.0,      # Quick small profits
-            tp_percent1=70.0,
-            tp_percent2=25.0,
-            tp_percent3=5.0,
+            tp_percent1=100.0,  # Single TP - sell all
             rsi_entry_threshold=50.0,
             rsi_safety_threshold=40.0,
             trailing_deviation=0.5
@@ -332,11 +308,9 @@ class OptimizationConfig:
             step_multiplier=trial.suggest_categorical('step_multiplier', self.ranges.step_multiplier),
             max_safeties=trial.suggest_categorical('max_safeties', self.ranges.max_safeties),
 
-            # Take profits
+            # Take profits (single TP target)
             tp_level1=tp_level1,
             tp_percent1=trial.suggest_categorical('tp_percent1', self.ranges.tp_percent1),
-            tp_percent2=trial.suggest_categorical('tp_percent2', self.ranges.tp_percent2),
-            tp_percent3=trial.suggest_categorical('tp_percent3', self.ranges.tp_percent3),
 
             # Trailing stop
             trailing_deviation=effective_trailing,
@@ -388,9 +362,7 @@ class MarketOptimizationRanges:
         return OptimizationRanges(
             base_percent=[2.0, 3.0, 4.0, 5.0, 7.5, 10.0],           # Larger positions
             tp_level1=[3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0],        # Higher TPs
-            tp_percent1=[15.0, 20.0, 25.0, 30.0, 35.0],             # Sell less
-            tp_percent2=[15.0, 20.0, 25.0, 30.0],
-            tp_percent3=[20.0, 25.0, 30.0, 40.0],                   # Keep more
+            tp_percent1=[100.0],  # Single TP - sell all position
             rsi_entry_threshold=[45.0, 50.0, 55.0, 60.0, 65.0],     # More entries
             trailing_deviation=[2.0, 3.0, 4.0, 5.0]                 # Wider stops
         )
@@ -401,9 +373,7 @@ class MarketOptimizationRanges:
         return OptimizationRanges(
             base_percent=[0.5, 1.0, 1.5, 2.0, 2.5],                 # Smaller positions
             tp_level1=[1.0, 1.5, 2.0, 2.5, 3.0],                    # Lower TPs
-            tp_percent1=[40.0, 50.0, 60.0, 70.0],                   # Sell more
-            tp_percent2=[25.0, 30.0, 35.0, 40.0],
-            tp_percent3=[10.0, 15.0, 20.0],                         # Keep less
+            tp_percent1=[100.0],  # Single TP - sell all position
             rsi_entry_threshold=[25.0, 30.0, 35.0, 40.0, 45.0],     # Conservative entries
             trailing_deviation=[0.5, 1.0, 1.5, 2.0]                 # Tighter stops
         )
@@ -414,7 +384,7 @@ class MarketOptimizationRanges:
         return OptimizationRanges(
             base_percent=[1.0, 1.5, 2.0, 2.5, 3.0],
             tp_level1=[1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
-            tp_percent1=[30.0, 40.0, 50.0, 60.0],
+            tp_percent1=[100.0],  # Single TP - sell all position
             rsi_entry_threshold=[35.0, 40.0, 45.0, 50.0, 55.0],
             trailing_deviation=[1.0, 1.5, 2.0, 2.5, 3.0]
         )

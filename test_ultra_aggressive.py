@@ -18,19 +18,17 @@ def test_ultra_aggressive():
     data = FastDataProcessor.load_data('data/SOLUSDT_1m.csv')
     backtester = FastBacktester(data, 10000)
     
-    # Ultra Aggressive parameters that achieved 21.16% APY
+    # FIXED: Ultra Aggressive parameters for 1 TP system
     params = StrategyParams(
         base_percent=3.0,
         initial_deviation=0.3,
-        trailing_deviation=1.5,
+        trailing_deviation=1.5,  # Less than TP1 (2.0%)
         tp_level1=2.0,
-        tp_percent1=70,
-        tp_percent2=20,
-        tp_percent3=10,
+        tp_percent1=100.0,  # FIXED: 100% for 1 TP system (sell entire position)
         rsi_entry_threshold=70.0,
         rsi_safety_threshold=75.0,
         
-        # Keep filters disabled
+        # Keep filters disabled for ultra aggressive mode
         sma_trend_filter=False,
         ema_trend_filter=False,
         atr_volatility_filter=False,
