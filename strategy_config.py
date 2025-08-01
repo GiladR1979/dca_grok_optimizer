@@ -85,7 +85,7 @@ class OptimizationRanges:
             self.max_safeties = [8]
 
         if self.tp_level1 is None:
-            self.tp_level1 = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 10.0]
+            self.tp_level1 = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 10.0, 12, 14, 16, 20]
 
         if self.tp_percent1 is None:
             self.tp_percent1 = [100]  # Single TP target - sell entire position
