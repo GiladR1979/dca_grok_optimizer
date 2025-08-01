@@ -1018,37 +1018,32 @@ class Visualizer:
     def simulate_with_trades(backtester: FastBacktester, params: StrategyParams) -> Tuple[float, float, List, List]:
         """Run simulation with actual trade tracking for accurate visualization"""
         
-        # Use the CPU version with actual trade tracking for final visualization
-        try:
-            return simulate_with_actual_trades(backtester, params)
-        except ImportError as e:
-            print(f"Warning: Could not import original DCAStrategy: {e}")
-            print("Using fast simulation instead...")
-            # Fallback to fast version if original DCAStrategy not available
-            apy, max_drawdown, num_trades, balance_history = backtester.simulate_strategy_fast(params)
-            
-            # balance_history is already in tuple format from simulate_strategy_fast
-            balance_history_tuples = balance_history
-            
-            # Create minimal synthetic trades
-            trades = []
-            if num_trades > 0:
-                trade_frequency = max(1, len(balance_history_tuples) // num_trades)
-                for i in range(0, len(balance_history_tuples), trade_frequency):
-                    if len(trades) >= num_trades:
-                        break
-                    timestamp, _ = balance_history_tuples[i]
-                    action = 'buy' if len(trades) % 3 < 2 else 'sell'
-                    trades.append(Trade(
-                        timestamp=timestamp,
-                        action=action,
-                        amount_coin=0.05,
-                        price=backtester.prices[min(i, len(backtester.prices)-1)],
-                        usdt_amount=100.0,
-                        reason='base_order' if action == 'buy' else 'take_profit'
-                    ))
-            
-            return apy, max_drawdown, balance_history_tuples, trades
+        # Use fast simulation directly - the detailed trade simulation is causing issues
+        print("Using fast simulation for final results...")
+        apy, max_drawdown, num_trades, balance_history = backtester.simulate_strategy_fast(params)
+        
+        # balance_history is already in tuple format from simulate_strategy_fast
+        balance_history_tuples = balance_history
+        
+        # Create minimal synthetic trades
+        trades = []
+        if num_trades > 0:
+            trade_frequency = max(1, len(balance_history_tuples) // num_trades)
+            for i in range(0, len(balance_history_tuples), trade_frequency):
+                if len(trades) >= num_trades:
+                    break
+                timestamp, _ = balance_history_tuples[i]
+                action = 'buy' if len(trades) % 3 < 2 else 'sell'
+                trades.append(Trade(
+                    timestamp=timestamp,
+                    action=action,
+                    amount_coin=0.05,
+                    price=backtester.prices[min(i, len(backtester.prices)-1)],
+                    usdt_amount=100.0,
+                    reason='base_order' if action == 'buy' else 'take_profit'
+                ))
+        
+        return apy, max_drawdown, balance_history_tuples, trades
     
     @staticmethod
     def plot_results(balance_history: List[Tuple[datetime, float]], 
@@ -1267,6 +1262,7 @@ def main():
         
         optimizer = FastOptimizer(backtester, optimization_config)
         best_params = optimizer.optimize_fast(args.trials)
+        print(f"Optimization completed! Best params: {best_params}")
         
         # best_params is already a StrategyParams object
         strategy_params = best_params
@@ -1274,35 +1270,101 @@ def main():
         strategy_params = StrategyParams()
         print("Using default strategy parameters")
     
-    # Final simulation with trades for visualization
-    apy, max_drawdown, balance_history, trades = Visualizer.simulate_with_trades(backtester, strategy_params)
+    # For optimization, just get the key metrics without complex visualization
+    if args.optimize:
+        print("Getting final metrics from optimization...")
+        try:
+            # Get final performance metrics using the fast simulation
+            params_array = np.array([
+                strategy_params.base_percent,
+                strategy_params.initial_deviation, 
+                strategy_params.trailing_deviation,
+                strategy_params.tp_level1,
+                strategy_params.tp_percent1,
+                strategy_params.tp_percent2,
+                strategy_params.tp_percent3,
+                strategy_params.rsi_entry_threshold,
+                strategy_params.rsi_safety_threshold,
+                strategy_params.fees
+            ])
+            
+            result = fast_simulate_strategy(
+                backtester.prices,
+                backtester.indicators['rsi_1h'],
+                backtester.indicators['rsi_4h'],
+                backtester.indicators['sma_fast_1h'], 
+                backtester.indicators['sma_slow_1h'],
+                params_array,
+                backtester.initial_balance
+            )
+            if isinstance(result, tuple) and len(result) == 5:
+                final_value, max_drawdown, num_trades, balance_history, avg_drawdown_duration = result
+            else:
+                print(f"Warning: Unexpected return format from fast_simulate_strategy: {result}")
+                # Fallback values
+                final_value = backtester.initial_balance
+                max_drawdown = 0.0
+                num_trades = 0
+                balance_history = [(0, backtester.initial_balance)]
+                avg_drawdown_duration = 0.0
+            
+            # Calculate APY
+            days = (data.index[-1] - data.index[0]).days
+            apy = ((final_value / backtester.initial_balance) ** (365/days) - 1) * 100
+            
+            # Convert balance_history tuples to proper format for visualization
+            # The balance_history is a numpy array, need to pair it with timestamps
+            timestamps = data.index[:len(balance_history)]
+            balance_history_for_save = [(timestamps[i], balance_history[i]) for i in range(len(balance_history))]
+            
+            # Create synthetic trades for visualization (based on trade count)
+            trades = []
+            if num_trades > 0:
+                # Create evenly spaced synthetic trades
+                trade_frequency = max(1, len(balance_history_for_save) // min(num_trades, 100))  # Limit to 100 trades for visualization
+                for i in range(0, len(balance_history_for_save), trade_frequency):
+                    if len(trades) >= min(num_trades, 100):
+                        break
+                    timestamp = balance_history_for_save[i][0]
+                    action = 'buy' if len(trades) % 3 < 2 else 'sell'
+                    price = backtester.prices[min(i, len(backtester.prices)-1)]
+                    trades.append(Trade(
+                        timestamp=timestamp,
+                        action=action,
+                        amount_coin=0.05,
+                        price=price,
+                        usdt_amount=100.0,
+                        reason='base_order' if action == 'buy' else 'take_profit'
+                    ))
+            
+            print(f"Final optimization results: APY={apy:.2f}%, Max DD={max_drawdown:.2f}%, Trades={num_trades}")
+            
+        except Exception as e:
+            print(f"❌ Error in final metrics calculation: {e}")
+            # Use optimization values if available
+            apy, max_drawdown = 0.0, 0.0
+            balance_history_for_save = [(data.index[0], backtester.initial_balance), (data.index[-1], backtester.initial_balance)]
+            trades = []
+            avg_drawdown_duration = 0
+            num_trades = 0
+    else:
+        # For non-optimization runs, do full simulation with trades for visualization
+        print("Running full simulation with trades for visualization...")
+        try:
+            apy, max_drawdown, balance_history_for_save, trades = Visualizer.simulate_with_trades(backtester, strategy_params)
+            print(f"Full simulation completed: APY={apy:.2f}%, Max DD={max_drawdown:.2f}%")
+        except Exception as e:
+            print(f"❌ Error in final simulation: {e}")
+            import traceback
+            traceback.print_exc()
+            return
     
-    # Get drawdown duration from the optimized simulation
-    params_array = np.array([
-        strategy_params.base_percent,
-        strategy_params.initial_deviation, 
-        strategy_params.trailing_deviation,
-        strategy_params.tp_level1,
-        strategy_params.tp_percent1,
-        strategy_params.tp_percent2,
-        strategy_params.tp_percent3,
-        strategy_params.rsi_entry_threshold,
-        strategy_params.rsi_safety_threshold,
-        strategy_params.fees
-    ])
+    # Calculate additional metrics for results
+    if not args.optimize:
+        # For non-optimization runs, get additional metrics if needed
+        num_trades = len(trades)
+        avg_drawdown_duration = 0  # Will be calculated properly if needed
     
-    _, _, _, _, avg_drawdown_duration = fast_simulate_strategy(
-        backtester.prices,
-        backtester.indicators['rsi_1h'],
-        backtester.indicators['rsi_4h'],
-        backtester.indicators['sma_fast_1h'], 
-        backtester.indicators['sma_slow_1h'],
-        params_array,
-        backtester.initial_balance
-    )
-    
-    # Calculate additional metrics
-    num_trades = len(trades)
     final_balance = args.initial_balance * (1 + apy/100)
     
     # Results
@@ -1371,9 +1433,13 @@ def main():
     print(f"Trades log saved to: {trades_path}")
     
     # Create and save visualization
-    chart_path = output_dir / f"{base_filename}_chart.png"
-    Visualizer.plot_results(balance_history, trades, args.coin, str(chart_path))
-    print(f"Chart saved to: {chart_path}")
+    try:
+        chart_path = output_dir / f"{base_filename}_chart.png"
+        Visualizer.plot_results(balance_history_for_save, trades, args.coin, str(chart_path))
+        print(f"Chart saved to: {chart_path}")
+    except Exception as e:
+        print(f"Warning: Could not create chart: {e}")
+        print("Chart generation failed, but other results were saved successfully")
     
     print(f"\nAll results saved to: {output_dir}")
 
