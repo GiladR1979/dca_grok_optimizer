@@ -156,13 +156,13 @@ class StrategyParams:
     """Strategy parameters for optimization - centralized version"""
 
     # === POSITION SIZING ===
-    base_percent: float = 1.0                 # Base order as % of balance
+    base_percent: float = 5.7                 # Base order as % of balance (optimized for ~100% total)
     volume_multiplier: float = 1.2           # Safety order volume scaling
 
     # === ENTRY CONDITIONS ===
-    initial_deviation: float = 3.0           # First safety order deviation %
+    initial_deviation: float = 2.0           # First safety order deviation %
     step_multiplier: float = 1.5             # Safety order step scaling
-    max_safeties: int = 8                    # Maximum safety orders
+    max_safeties: int = 8                    # Maximum safety orders (uses ~99.75% of account)
 
     # === TAKE PROFIT LEVELS === (Single TP target only)
     tp_level1: float = 3.0                   # TP level %
@@ -234,11 +234,15 @@ class StrategyPresets:
     def aggressive() -> StrategyParams:
         """Aggressive strategy for bull markets"""
         return StrategyParams(
-            base_percent=5.0,
+            base_percent=4.8,  # Reduced from 5.0 to fit within 100% balance
             initial_deviation=2.0,
+            step_multiplier=1.5,
+            volume_multiplier=1.2,
+            max_safeties=8,
             tp_level1=5.0,
             tp_percent1=100.0,  # Single TP - sell all
             rsi_entry_threshold=55.0,
+            rsi_safety_threshold=30.0,
             trailing_deviation=3.0
         )
 

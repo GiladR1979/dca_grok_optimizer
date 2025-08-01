@@ -448,7 +448,8 @@ def enhanced_simulate_strategy_with_trades(
                 safety_order_sizes = []
                 total_required = base_amount_usdt
                 for s in range(max_safeties):
-                    safety_multiplier = volume_multiplier ** s
+                    # First safety order should use multiplier^1, not multiplier^0
+                    safety_multiplier = volume_multiplier ** (s + 1)
                     safety_amount = deal_start_balance * (base_percent / 100.0) * safety_multiplier
                     safety_order_sizes.append(safety_amount)
                     total_required += safety_amount
@@ -2073,6 +2074,10 @@ def main():
             'rsi_entry_threshold': strategy_params.rsi_entry_threshold,
             'rsi_safety_threshold': strategy_params.rsi_safety_threshold,
             'fees': strategy_params.fees,
+            # Safety order parameters (as requested by user)
+            'volume_multiplier': strategy_params.volume_multiplier,
+            'step_multiplier': strategy_params.step_multiplier,
+            'max_safeties': strategy_params.max_safeties,
             # 3commas conditional filters
             'sma_trend_filter': strategy_params.sma_trend_filter,
             'sma_trend_period': strategy_params.sma_trend_period,
