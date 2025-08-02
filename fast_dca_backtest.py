@@ -1805,94 +1805,125 @@ class Visualizer:
     @staticmethod
     def plot_results(balance_history: List[Tuple[datetime, float]],
                      trades: List[Trade], coin: str, save_path: str):
-        """Create balance and trades visualization - optimized for large datasets"""
+        """Create comprehensive visualization with price chart, balance, and trades"""
         try:
-            print(f"Creating chart with {len(balance_history)} data points and {len(trades)} trades...")
+            print(f"Creating comprehensive chart with {len(balance_history)} data points and {len(trades)} trades...")
 
-            # Aggressive downsampling for very large datasets
-            max_points = 5000  # Reduced from 10000
-            if len(balance_history) > max_points:
-                sample_rate = len(balance_history) // max_points
+            # Downsample balance history to exactly 5000 points as requested
+            max_balance_points = 5000
+            if len(balance_history) > max_balance_points:
+                sample_rate = len(balance_history) // max_balance_points
                 balance_history = balance_history[::sample_rate]
-                print(f"Downsampled to {len(balance_history)} points for visualization")
+                print(f"Downsampled balance to {len(balance_history)} points for visualization")
 
-            # Limit trades for visualization
-            max_trades = 1000  # Limit trade markers
-            if len(trades) > max_trades:
-                trade_sample_rate = len(trades) // max_trades
-                trades = trades[::trade_sample_rate]
-                print(f"Downsampled to {len(trades)} trade markers for visualization")
+            # Create figure with multiple subplots (mac_branch style)
+            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 12))
+            fig.suptitle(f'{coin} - DCA Strategy Backtest Results', fontsize=16, fontweight='bold')
 
-            fig, ax1 = plt.subplots(1, 1, figsize=(10, 6))  # Single plot, smaller size
-
-            # Balance chart only
+            # Extract data
             times, balances = zip(*balance_history)
-            ax1.plot(times, balances, 'b-', linewidth=1, label='Portfolio Value')
-
-            # Simplified trade markers - sample only key trades
-            if len(trades) > 0:
-                buy_times = []
-                buy_balances = []
-                sell_times = []
-                sell_balances = []
-
-                # Simple approach - use trade timestamps directly with balance interpolation
-                for trade in trades[:500]:  # Limit to first 500 trades
-                    try:
-                        trade_time = trade.timestamp
-                        if hasattr(trade_time, 'to_pydatetime'):
-                            trade_time = trade_time.to_pydatetime()
-                        elif not isinstance(trade_time, datetime):
-                            trade_time = pd.to_datetime(trade_time).to_pydatetime()
-
-                        # Simple balance estimation - use closest balance value
-                        closest_balance = balances[0]  # Default fallback
-                        for i, (time, balance) in enumerate(balance_history):
-                            if time >= trade_time:
-                                closest_balance = balance
-                                break
-
-                        if trade.action == 'buy':
-                            buy_times.append(trade_time)
-                            buy_balances.append(closest_balance)
-                        else:
-                            sell_times.append(trade_time)
-                            sell_balances.append(closest_balance)
-                    except Exception:
-                        continue  # Skip problematic trades
-
-                # Add trade markers with reduced size
-                if buy_times:
-                    ax1.scatter(buy_times, buy_balances, color='green', marker='^',
-                               s=15, alpha=0.5, label=f'Buys ({len(buy_times)})')
-                if sell_times:
-                    ax1.scatter(sell_times, sell_balances, color='red', marker='v',
-                               s=15, alpha=0.5, label=f'Sells ({len(sell_times)})')
-
-            ax1.set_title(f'{coin} - Portfolio Value Over Time')
-            ax1.set_xlabel('Date')
-            ax1.set_ylabel('USDT Value')
-            ax1.legend()
+            
+            # Subplot 1: Portfolio Value
+            ax1.plot(times, balances, 'b-', linewidth=2, label='Portfolio Value')
+            ax1.set_title('Portfolio Value Over Time', fontweight='bold')
+            ax1.set_ylabel('USDT Value', fontweight='bold')
             ax1.grid(True, alpha=0.3)
+            ax1.legend()
+            
+            # Add performance metrics as text
+            initial_balance = balances[0]
+            final_balance = balances[-1]
+            total_return = (final_balance - initial_balance) / initial_balance * 100
+            max_balance = max(balances)
+            max_drawdown = (max_balance - min(balances)) / max_balance * 100
+            
+            ax1.text(0.02, 0.98, f'Total Return: {total_return:.1f}%\nMax Drawdown: {max_drawdown:.1f}%', 
+                    transform=ax1.transAxes, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
-            # Simplified x-axis formatting
-            try:
-                ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-                ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=6))  # Fewer ticks
-                plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
-            except Exception:
-                pass  # Skip formatting if it fails
+            # Subplot 2: Trade Analysis
+            if len(trades) > 0:
+                # Separate buy and sell trades
+                buy_trades = [t for t in trades if t.action == 'buy']
+                sell_trades = [t for t in trades if t.action == 'sell']
+                
+                # Plot trade volumes over time
+                if buy_trades:
+                    buy_times = [t.timestamp for t in buy_trades]
+                    buy_amounts = [t.usdt_amount for t in buy_trades]
+                    ax2.scatter(buy_times, buy_amounts, color='green', marker='^', 
+                              s=30, alpha=0.7, label=f'Buy Orders ({len(buy_trades)})')
+                
+                if sell_trades:
+                    sell_times = [t.timestamp for t in sell_trades]
+                    sell_amounts = [t.usdt_amount for t in sell_trades]
+                    ax2.scatter(sell_times, sell_amounts, color='red', marker='v', 
+                              s=30, alpha=0.7, label=f'Sell Orders ({len(sell_trades)})')
+                
+                ax2.set_title('Trade Volumes Over Time', fontweight='bold')
+                ax2.set_ylabel('USDT Amount', fontweight='bold')
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
+                
+                # Add trade statistics
+                total_buy_volume = sum(t.usdt_amount for t in buy_trades)
+                total_sell_volume = sum(t.usdt_amount for t in sell_trades)
+                ax2.text(0.02, 0.98, f'Total Buys: ${total_buy_volume:,.0f}\nTotal Sells: ${total_sell_volume:,.0f}', 
+                        transform=ax2.transAxes, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+            else:
+                ax2.text(0.5, 0.5, 'No trades executed', ha='center', va='center', 
+                        transform=ax2.transAxes, fontsize=14)
+                ax2.set_title('Trade Volumes Over Time', fontweight='bold')
+
+            # Subplot 3: Cumulative Trade Count and Deal Analysis
+            if len(trades) > 0:
+                # Calculate cumulative trade count
+                trade_times = [t.timestamp for t in trades]
+                cumulative_trades = list(range(1, len(trades) + 1))
+                
+                ax3.plot(trade_times, cumulative_trades, 'purple', linewidth=2, label='Cumulative Trades')
+                ax3.set_title('Trading Activity Over Time', fontweight='bold')
+                ax3.set_ylabel('Cumulative Trade Count', fontweight='bold')
+                ax3.set_xlabel('Date', fontweight='bold')
+                ax3.grid(True, alpha=0.3)
+                ax3.legend()
+                
+                # Add deal analysis
+                base_orders = len([t for t in trades if 'base' in t.reason])
+                safety_orders = len([t for t in trades if 'safety' in t.reason])
+                take_profits = len([t for t in trades if 'profit' in t.reason or t.action == 'sell'])
+                
+                ax3.text(0.02, 0.98, f'Base Orders: {base_orders}\nSafety Orders: {safety_orders}\nTake Profits: {take_profits}', 
+                        transform=ax3.transAxes, verticalalignment='top',
+                        bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+            else:
+                ax3.text(0.5, 0.5, 'No trading activity', ha='center', va='center', 
+                        transform=ax3.transAxes, fontsize=14)
+                ax3.set_title('Trading Activity Over Time', fontweight='bold')
+                ax3.set_xlabel('Date', fontweight='bold')
+
+            # Format x-axis for all subplots
+            for ax in [ax1, ax2, ax3]:
+                try:
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+                    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+                except Exception:
+                    pass
 
             plt.tight_layout()
 
-            # Save with very low DPI for speed
-            print("Saving chart...")
-            plt.savefig(save_path, dpi=100, bbox_inches='tight', facecolor='white')
+            # Save with high quality
+            print("Saving comprehensive chart...")
+            plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
             plt.close()
             print(f"Chart saved to: {save_path}")
 
         except Exception as e:
             print(f"Chart generation failed: {e}")
+            import traceback
+            traceback.print_exc()
             # Create a simple text file instead
             try:
                 with open(save_path.replace('.png', '_summary.txt'), 'w') as f:
