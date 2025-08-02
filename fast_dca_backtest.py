@@ -641,18 +641,6 @@ def enhanced_simulate_strategy(
             else:  # 4h
                 current_supertrend_direction = supertrend_direction_4h[i] if i < len(supertrend_direction_4h) else 1.0
 
-            # Get previous SuperTrend direction to detect flips
-            prev_supertrend_direction = 1.0
-            if i > 0:
-                if supertrend_timeframe == 0:  # 15m (mapped to 1h for now)
-                    prev_supertrend_direction = supertrend_direction_1h[i-1] if i-1 < len(supertrend_direction_1h) else 1.0
-                elif supertrend_timeframe == 1:  # 30m (mapped to 1h for now)
-                    prev_supertrend_direction = supertrend_direction_1h[i-1] if i-1 < len(supertrend_direction_1h) else 1.0
-                elif supertrend_timeframe == 2:  # 1h
-                    prev_supertrend_direction = supertrend_direction_1h[i-1] if i-1 < len(supertrend_direction_1h) else 1.0
-                else:  # 4h
-                    prev_supertrend_direction = supertrend_direction_4h[i-1] if i-1 < len(supertrend_direction_4h) else 1.0
-
             # SUPERTREND DEAL LOGIC: Open deals consecutively when SuperTrend shows direction
             # Enter LONG deals when SuperTrend is bullish (direction = 1)
             # Enter SHORT deals when SuperTrend is bearish (direction = -1)
@@ -669,20 +657,24 @@ def enhanced_simulate_strategy(
                 # Determine deal direction
                 deal_side = 1 if supertrend_bullish else -1  # 1 = LONG, -1 = SHORT
 
-                # Pre-calculate all order sizes based on initial balance at deal start
-                deal_start_balance = balance
-                base_amount_usdt = deal_start_balance * (base_percent / 100.0)
+                # CRITICAL FIX: Use FIXED base order size, not percentage of growing balance
+                # This prevents exponential growth of order sizes
+                base_amount_usdt = initial_balance * (base_percent / 100.0)
                 
-                if base_amount_usdt > 1.0:
+                # Ensure we don't spend more than available balance
+                if base_amount_usdt > balance * 0.95:
+                    base_amount_usdt = balance * 0.95
+                
+                if base_amount_usdt > 1.0 and balance > base_amount_usdt:
                     fee_amount = base_amount_usdt * fees
                     net_amount_usdt = base_amount_usdt - fee_amount
+                    coin_amount = net_amount_usdt / current_price
                     
                     if deal_side == 1:  # LONG deal
-                        coin_amount = net_amount_usdt / current_price
                         balance -= base_amount_usdt
                         position_size = coin_amount  # Positive for LONG
                     else:  # SHORT deal (deal_side == -1)
-                        coin_amount = net_amount_usdt / current_price
+                        # For SHORT: we "borrow" coins and sell them for USDT
                         balance += net_amount_usdt  # Add USDT from short sale
                         position_size = -coin_amount  # Negative for SHORT
 
@@ -697,7 +689,7 @@ def enhanced_simulate_strategy(
                     num_trades += 1
                     
                     # Store the deal start balance and side for safety order calculations
-                    deal_balance = deal_start_balance
+                    deal_balance = initial_balance  # Use initial balance for consistent sizing
                     deal_direction = deal_side  # Store deal direction
 
         # 2. ACTIVE DEAL MANAGEMENT - DUAL DIRECTION SUPPORT
@@ -720,15 +712,16 @@ def enhanced_simulate_strategy(
                 safety_rsi_ok = current_rsi_1h < rsi_safety_thresh
 
                 if safety_trigger and safety_rsi_ok:
+                    # CRITICAL FIX: Use FIXED initial balance for safety orders too
+                    # This prevents safety orders from growing exponentially
                     safety_multiplier = volume_multiplier ** safety_count
-                    # Use deal start balance for consistent order sizing
-                    safety_base = deal_balance * (base_percent / 100.0)
-                    safety_amount_usdt = safety_base * safety_multiplier
+                    safety_amount_usdt = initial_balance * (base_percent / 100.0) * safety_multiplier
 
-                    if safety_amount_usdt > balance:
+                    # Ensure we don't spend more than available balance
+                    if safety_amount_usdt > balance * 0.95:
                         safety_amount_usdt = balance * 0.95
 
-                    if safety_amount_usdt > 1.0:
+                    if safety_amount_usdt > 1.0 and balance > safety_amount_usdt:
                         fee_amount = safety_amount_usdt * fees
                         net_amount_usdt = safety_amount_usdt - fee_amount
                         safety_coins = net_amount_usdt / current_price
@@ -1813,119 +1806,104 @@ class Visualizer:
     def plot_results(balance_history: List[Tuple[datetime, float]],
                      trades: List[Trade], coin: str, save_path: str):
         """Create balance and trades visualization - optimized for large datasets"""
-        print(f"Creating chart with {len(balance_history)} data points and {len(trades)} trades...")
+        try:
+            print(f"Creating chart with {len(balance_history)} data points and {len(trades)} trades...")
 
-        # Downsample balance history for large datasets to prevent memory issues
-        max_points = 10000
-        if len(balance_history) > max_points:
-            sample_rate = len(balance_history) // max_points
-            balance_history = balance_history[::sample_rate]
-            print(f"Downsampled to {len(balance_history)} points for visualization")
+            # Aggressive downsampling for very large datasets
+            max_points = 5000  # Reduced from 10000
+            if len(balance_history) > max_points:
+                sample_rate = len(balance_history) // max_points
+                balance_history = balance_history[::sample_rate]
+                print(f"Downsampled to {len(balance_history)} points for visualization")
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))  # Reduced figure size
+            # Limit trades for visualization
+            max_trades = 1000  # Limit trade markers
+            if len(trades) > max_trades:
+                trade_sample_rate = len(trades) // max_trades
+                trades = trades[::trade_sample_rate]
+                print(f"Downsampled to {len(trades)} trade markers for visualization")
 
-        # Balance chart
-        times, balances = zip(*balance_history)
-        ax1.plot(times, balances, 'b-', linewidth=1.5, label='Portfolio Value')
+            fig, ax1 = plt.subplots(1, 1, figsize=(10, 6))  # Single plot, smaller size
 
-        # Show ALL trade markers as requested
-        sampled_trades = trades
-        print(f"Showing ALL {len(trades)} trade markers on the chart")
+            # Balance chart only
+            times, balances = zip(*balance_history)
+            ax1.plot(times, balances, 'b-', linewidth=1, label='Portfolio Value')
 
-        # Add trade markers
-        buy_times = []
-        buy_balances = []
-        sell_times = []
-        sell_balances = []
+            # Simplified trade markers - sample only key trades
+            if len(trades) > 0:
+                buy_times = []
+                buy_balances = []
+                sell_times = []
+                sell_balances = []
 
-        # Convert balance_history to dict for faster lookup
-        time_to_balance = {t: b for t, b in balance_history}
-        sorted_times = sorted(time_to_balance.keys())
+                # Simple approach - use trade timestamps directly with balance interpolation
+                for trade in trades[:500]:  # Limit to first 500 trades
+                    try:
+                        trade_time = trade.timestamp
+                        if hasattr(trade_time, 'to_pydatetime'):
+                            trade_time = trade_time.to_pydatetime()
+                        elif not isinstance(trade_time, datetime):
+                            trade_time = pd.to_datetime(trade_time).to_pydatetime()
 
-        for trade in sampled_trades:
-            # Find closest time in balance history
-            trade_time = trade.timestamp
-            if hasattr(trade_time, 'to_pydatetime'):
-                trade_time = trade_time.to_pydatetime()
-            elif not isinstance(trade_time, datetime):
-                trade_time = pd.to_datetime(trade_time).to_pydatetime()
+                        # Simple balance estimation - use closest balance value
+                        closest_balance = balances[0]  # Default fallback
+                        for i, (time, balance) in enumerate(balance_history):
+                            if time >= trade_time:
+                                closest_balance = balance
+                                break
 
-            # Binary search for closest time
-            idx = np.searchsorted([t.timestamp() if hasattr(t, 'timestamp') else pd.to_datetime(t).timestamp()
-                                  for t in sorted_times],
-                                 trade_time.timestamp() if hasattr(trade_time, 'timestamp') else pd.to_datetime(trade_time).timestamp())
+                        if trade.action == 'buy':
+                            buy_times.append(trade_time)
+                            buy_balances.append(closest_balance)
+                        else:
+                            sell_times.append(trade_time)
+                            sell_balances.append(closest_balance)
+                    except Exception:
+                        continue  # Skip problematic trades
 
-            if idx < len(sorted_times):
-                closest_time = sorted_times[min(idx, len(sorted_times)-1)]
-                balance = time_to_balance[closest_time]
+                # Add trade markers with reduced size
+                if buy_times:
+                    ax1.scatter(buy_times, buy_balances, color='green', marker='^',
+                               s=15, alpha=0.5, label=f'Buys ({len(buy_times)})')
+                if sell_times:
+                    ax1.scatter(sell_times, sell_balances, color='red', marker='v',
+                               s=15, alpha=0.5, label=f'Sells ({len(sell_times)})')
 
-                if trade.action == 'buy':
-                    buy_times.append(trade_time)
-                    buy_balances.append(balance)
-                else:
-                    sell_times.append(trade_time)
-                    sell_balances.append(balance)
+            ax1.set_title(f'{coin} - Portfolio Value Over Time')
+            ax1.set_xlabel('Date')
+            ax1.set_ylabel('USDT Value')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
 
-        if buy_times:
-            ax1.scatter(buy_times, buy_balances, color='green', marker='^',
-                       s=30, alpha=0.6, label=f'Buys ({len(buy_times)})')
-        if sell_times:
-            ax1.scatter(sell_times, sell_balances, color='red', marker='v',
-                       s=30, alpha=0.6, label=f'Sells ({len(sell_times)})')
+            # Simplified x-axis formatting
+            try:
+                ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+                ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=6))  # Fewer ticks
+                plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
+            except Exception:
+                pass  # Skip formatting if it fails
 
-        ax1.set_title(f'{coin} - Portfolio Value Over Time')
-        ax1.set_xlabel('Date')
-        ax1.set_ylabel('USDT Value')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
+            plt.tight_layout()
 
-        # Format x-axis - use fewer ticks for performance
-        ax1.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-        ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
-        plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
+            # Save with very low DPI for speed
+            print("Saving chart...")
+            plt.savefig(save_path, dpi=100, bbox_inches='tight', facecolor='white')
+            plt.close()
+            print(f"Chart saved to: {save_path}")
 
-        # Trade count over time - aggregate by week for large datasets
-        if len(trades) > 1000:
-            # Weekly aggregation
-            weekly_trades = {}
-            for trade in trades:
-                if hasattr(trade.timestamp, 'date'):
-                    date = trade.timestamp.date()
-                else:
-                    date = pd.to_datetime(trade.timestamp).date()
-                week_start = date - timedelta(days=date.weekday())
-                weekly_trades[week_start] = weekly_trades.get(week_start, 0) + 1
-
-            if weekly_trades:
-                dates, counts = zip(*sorted(weekly_trades.items()))
-                ax2.bar(dates, counts, alpha=0.7, color='orange', width=6)
-                ax2.set_title('Weekly Trade Count')
-        else:
-            # Daily aggregation for smaller datasets
-            daily_trades = {}
-            for trade in trades:
-                if hasattr(trade.timestamp, 'date'):
-                    date = trade.timestamp.date()
-                else:
-                    date = pd.to_datetime(trade.timestamp).date()
-                daily_trades[date] = daily_trades.get(date, 0) + 1
-
-            if daily_trades:
-                dates, counts = zip(*sorted(daily_trades.items()))
-                ax2.bar(dates, counts, alpha=0.7, color='orange')
-                ax2.set_title('Daily Trade Count')
-
-        ax2.set_xlabel('Date')
-        ax2.set_ylabel('Number of Trades')
-        ax2.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-
-        # Save with lower DPI for faster generation
-        print("Saving chart...")
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        print(f"Chart saved to: {save_path}")
+        except Exception as e:
+            print(f"Chart generation failed: {e}")
+            # Create a simple text file instead
+            try:
+                with open(save_path.replace('.png', '_summary.txt'), 'w') as f:
+                    f.write(f"Chart generation failed for {coin}\n")
+                    f.write(f"Balance history points: {len(balance_history)}\n")
+                    f.write(f"Total trades: {len(trades)}\n")
+                    if balance_history:
+                        f.write(f"Final balance: {balance_history[-1][1]:.2f}\n")
+                print(f"Summary saved to text file instead")
+            except Exception:
+                print("Could not save chart or summary")
 
     @staticmethod
     def save_trades_log(trades: List[Trade], save_path: str):
