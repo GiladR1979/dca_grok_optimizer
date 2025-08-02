@@ -56,7 +56,7 @@ class OptimizationRanges:
 
     # === SUPERTREND DRAWDOWN ELIMINATION (NEW) ===
     use_supertrend_filter: List[bool] = None   # Enable SuperTrend trend filtering
-    supertrend_timeframe: List[str] = None     # Timeframe for SuperTrend ('1h', '4h', '1d')
+    supertrend_timeframe: List[str] = None     # Timeframe for SuperTrend ('15m', '30m', '1h', '4h', '1d')
     supertrend_period: List[int] = None        # SuperTrend ATR period
     supertrend_multiplier: List[float] = None  # SuperTrend multiplier
     require_bullish_supertrend: List[bool] = None  # Only enter when SuperTrend is bullish
@@ -94,54 +94,54 @@ class OptimizationRanges:
             self.trailing_deviation = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 16.0, 18.0, 19.8]
 
         if self.rsi_entry_threshold is None:
-            self.rsi_entry_threshold = [30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0]
+            self.rsi_entry_threshold = [50.0]  # Fixed, not used
 
         if self.rsi_safety_threshold is None:
-            self.rsi_safety_threshold = [20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0]
+            self.rsi_safety_threshold = [50.0]  # Fixed, not used
 
         if self.rsi_exit_threshold is None:
-            self.rsi_exit_threshold = [60.0, 65.0, 70.0, 75.0, 80.0]
+            self.rsi_exit_threshold = [50.0]  # Fixed, not used
 
-        # 3commas conditional trade start conditions - LESS RESTRICTIVE for better APY
+        # 3commas conditional trade start conditions - DISABLED
         if self.sma_trend_filter is None:
-            self.sma_trend_filter = [False, False, False, True]  # 75% chance disabled
+            self.sma_trend_filter = [False]
 
         if self.sma_trend_period is None:
-            self.sma_trend_period = [50, 100]  # Removed 200 (too restrictive)
+            self.sma_trend_period = [50]
 
         if self.ema_trend_filter is None:
-            self.ema_trend_filter = [False, False, False, True]  # 75% chance disabled
+            self.ema_trend_filter = [False]
 
         if self.ema_trend_period is None:
-            self.ema_trend_period = [21, 50]  # Removed 100 (too restrictive)
+            self.ema_trend_period = [21]
 
         if self.atr_volatility_filter is None:
-            self.atr_volatility_filter = [False, False, True]  # 67% chance disabled
+            self.atr_volatility_filter = [False]
 
         if self.atr_period is None:
-            self.atr_period = [14, 21]  # Removed 28 (too restrictive)
+            self.atr_period = [14]
 
         if self.atr_multiplier is None:
-            self.atr_multiplier = [2.0, 2.5, 3.0, 4.0, 5.0]  # Higher multipliers = less restrictive
+            self.atr_multiplier = [2.0]
 
         if self.higher_highs_filter is None:
-            self.higher_highs_filter = [False, False, True]  # 67% chance disabled
+            self.higher_highs_filter = [False]
 
         if self.higher_highs_period is None:
-            self.higher_highs_period = [10, 20]  # Removed 30 (too restrictive)
+            self.higher_highs_period = [10]
 
         if self.volume_confirmation is None:
-            self.volume_confirmation = [False, False, True]  # 67% chance disabled
+            self.volume_confirmation = [False]
 
         if self.volume_sma_period is None:
-            self.volume_sma_period = [10, 20]  # Removed 30 (too restrictive)
+            self.volume_sma_period = [10]
 
         # SuperTrend drawdown elimination settings
         if self.use_supertrend_filter is None:
-            self.use_supertrend_filter = [True, False]  # 50% chance enabled for testing
+            self.use_supertrend_filter = [True]  # Always enabled
 
         if self.supertrend_timeframe is None:
-            self.supertrend_timeframe = ['15m', '30m', '1h', '4h']
+            self.supertrend_timeframe = ['15m', '30m', '1h', '4h', '1d']
 
         if self.supertrend_period is None:
             self.supertrend_period = [7, 10, 14, 21]  # ATR periods to test
@@ -150,7 +150,7 @@ class OptimizationRanges:
             self.supertrend_multiplier = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]  # Multipliers to test
 
         if self.require_bullish_supertrend is None:
-            self.require_bullish_supertrend = [True, False]  # Test both modes
+            self.require_bullish_supertrend = [False]  # Allow both directions
 
 
 @dataclass
@@ -158,8 +158,8 @@ class StrategyParams:
     """Strategy parameters for optimization - centralized version"""
 
     # === POSITION SIZING ===
-    base_percent: float = 5.7                 # Base order as % of balance (optimized for ~100% total)
-    volume_multiplier: float = 1.2           # Safety order volume scaling
+    base_percent: float = 1.33                 # Base order as % of balance (optimized for ~100% total)
+    volume_multiplier: float = 1.5           # Safety order volume scaling
 
     # === ENTRY CONDITIONS ===
     initial_deviation: float = 2.0           # First safety order deviation %
@@ -174,36 +174,36 @@ class StrategyParams:
     trailing_deviation: float = 3.0          # Trailing stop %
 
     # === RSI CONDITIONS ===
-    rsi_entry_threshold: float = 40.0        # RSI entry threshold
-    rsi_safety_threshold: float = 30.0       # RSI safety threshold
-    rsi_exit_threshold: float = 70.0         # RSI exit threshold
+    rsi_entry_threshold: float = 50.0        # Not used
+    rsi_safety_threshold: float = 50.0       # Not used
+    rsi_exit_threshold: float = 50.0         # Not used
 
     # === 3COMMAS CONDITIONAL TRADE START CONDITIONS ===
     # Market trend filters (available on 3commas)
-    sma_trend_filter: bool = False           # Require price > SMA for trend confirmation
-    sma_trend_period: int = 200              # SMA period for trend filter (50, 100, 200)
-    ema_trend_filter: bool = False           # Require price > EMA for trend confirmation
-    ema_trend_period: int = 50               # EMA period for trend filter (21, 50, 100)
+    sma_trend_filter: bool = False           # Disabled
+    sma_trend_period: int = 200              # Not used
+    ema_trend_filter: bool = False           # Disabled
+    ema_trend_period: int = 50               # Not used
 
     # Volatility filters (available on 3commas)
-    atr_volatility_filter: bool = False      # Enable ATR volatility filter
-    atr_period: int = 14                     # ATR calculation period
-    atr_multiplier: float = 1.5              # ATR threshold multiplier
+    atr_volatility_filter: bool = False      # Disabled
+    atr_period: int = 14                     # Not used
+    atr_multiplier: float = 1.5              # Not used
 
     # Market structure filters (available on 3commas)
-    higher_highs_filter: bool = False        # Require recent higher highs
-    higher_highs_period: int = 20            # Period to check for higher highs
+    higher_highs_filter: bool = False        # Disabled
+    higher_highs_period: int = 20            # Not used
 
     # Volume confirmation (available on 3commas)
-    volume_confirmation: bool = False        # Require volume confirmation
-    volume_sma_period: int = 20              # Volume SMA period for comparison
+    volume_confirmation: bool = False        # Disabled
+    volume_sma_period: int = 20              # Not used
 
     # === SUPERTREND DRAWDOWN ELIMINATION (NEW) ===
-    use_supertrend_filter: bool = False      # Enable SuperTrend trend filtering for drawdown elimination
-    supertrend_timeframe: str = '4h'         # Timeframe for SuperTrend analysis ('1h', '4h', '1d')
+    use_supertrend_filter: bool = True       # Always enabled
+    supertrend_timeframe: str = '4h'         # Timeframe for SuperTrend analysis ('15m', '30m', '1h', '4h', '1d')
     supertrend_period: int = 10              # SuperTrend ATR period (optimizable 7-21)
     supertrend_multiplier: float = 3.0       # SuperTrend multiplier (optimizable 1.0-5.0)
-    require_bullish_supertrend: bool = True  # Only enter when SuperTrend is bullish
+    require_bullish_supertrend: bool = False # Allow both directions
     max_acceptable_drawdown: float = 15.0    # Maximum acceptable drawdown % (stop optimization if exceeded)
 
     # === FIXED PARAMETERS ===
@@ -228,7 +228,6 @@ class StrategyPresets:
             initial_deviation=3.0,
             tp_level1=3.0,
             tp_percent1=100.0,  # Single TP - sell all
-            rsi_entry_threshold=35.0,
             trailing_deviation=2.0
         )
 
@@ -236,15 +235,13 @@ class StrategyPresets:
     def aggressive() -> StrategyParams:
         """Aggressive strategy for bull markets"""
         return StrategyParams(
-            base_percent=4.8,  # Reduced from 5.0 to fit within 100% balance
+            base_percent=1.33,
             initial_deviation=2.0,
             step_multiplier=1.5,
-            volume_multiplier=1.2,
+            volume_multiplier=1.5,
             max_safeties=8,
             tp_level1=5.0,
             tp_percent1=100.0,  # Single TP - sell all
-            rsi_entry_threshold=55.0,
-            rsi_safety_threshold=30.0,
             trailing_deviation=3.0
         )
 
@@ -252,12 +249,10 @@ class StrategyPresets:
     def bull_market() -> StrategyParams:
         """Optimized for trending bull markets"""
         return StrategyParams(
-            base_percent=3.0,
+            base_percent=1.33,
             initial_deviation=1.5,
             tp_level1=8.0,      # Let profits run longer
             tp_percent1=100.0,  # Single TP - sell all
-            rsi_entry_threshold=60.0,
-            rsi_safety_threshold=50.0,
             trailing_deviation=4.0
         )
 
@@ -265,12 +260,10 @@ class StrategyPresets:
     def bear_market() -> StrategyParams:
         """Optimized for bear/sideways markets"""
         return StrategyParams(
-            base_percent=2.0,
+            base_percent=1.33,
             initial_deviation=2.5,
             tp_level1=2.0,      # Take profits quickly
             tp_percent1=100.0,  # Single TP - sell all
-            rsi_entry_threshold=40.0,
-            rsi_safety_threshold=25.0,
             trailing_deviation=1.5
         )
 
@@ -278,12 +271,10 @@ class StrategyPresets:
     def scalping() -> StrategyParams:
         """High-frequency trading strategy"""
         return StrategyParams(
-            base_percent=1.5,
+            base_percent=1.33,
             initial_deviation=1.0,
             tp_level1=1.0,      # Quick small profits
             tp_percent1=100.0,  # Single TP - sell all
-            rsi_entry_threshold=50.0,
-            rsi_safety_threshold=40.0,
             trailing_deviation=0.5
         )
 
@@ -321,30 +312,30 @@ class OptimizationConfig:
             # Trailing stop
             trailing_deviation=effective_trailing,
 
-            # RSI conditions
-            rsi_entry_threshold=trial.suggest_categorical('rsi_entry_threshold', self.ranges.rsi_entry_threshold),
-            rsi_safety_threshold=trial.suggest_categorical('rsi_safety_threshold', self.ranges.rsi_safety_threshold),
-            rsi_exit_threshold=trial.suggest_categorical('rsi_exit_threshold', self.ranges.rsi_exit_threshold),
+            # RSI conditions (fixed, not used)
+            rsi_entry_threshold=50.0,
+            rsi_safety_threshold=50.0,
+            rsi_exit_threshold=50.0,
 
-            # 3commas conditional trade start conditions
-            sma_trend_filter=trial.suggest_categorical('sma_trend_filter', self.ranges.sma_trend_filter),
-            sma_trend_period=trial.suggest_categorical('sma_trend_period', self.ranges.sma_trend_period),
-            ema_trend_filter=trial.suggest_categorical('ema_trend_filter', self.ranges.ema_trend_filter),
-            ema_trend_period=trial.suggest_categorical('ema_trend_period', self.ranges.ema_trend_period),
-            atr_volatility_filter=trial.suggest_categorical('atr_volatility_filter', self.ranges.atr_volatility_filter),
-            atr_period=trial.suggest_categorical('atr_period', self.ranges.atr_period),
-            atr_multiplier=trial.suggest_categorical('atr_multiplier', self.ranges.atr_multiplier),
-            higher_highs_filter=trial.suggest_categorical('higher_highs_filter', self.ranges.higher_highs_filter),
-            higher_highs_period=trial.suggest_categorical('higher_highs_period', self.ranges.higher_highs_period),
-            volume_confirmation=trial.suggest_categorical('volume_confirmation', self.ranges.volume_confirmation),
-            volume_sma_period=trial.suggest_categorical('volume_sma_period', self.ranges.volume_sma_period),
+            # 3commas conditional trade start conditions (disabled)
+            sma_trend_filter=False,
+            sma_trend_period=200,
+            ema_trend_filter=False,
+            ema_trend_period=50,
+            atr_volatility_filter=False,
+            atr_period=14,
+            atr_multiplier=1.5,
+            higher_highs_filter=False,
+            higher_highs_period=20,
+            volume_confirmation=False,
+            volume_sma_period=20,
 
             # SuperTrend drawdown elimination
-            use_supertrend_filter=trial.suggest_categorical('use_supertrend_filter', self.ranges.use_supertrend_filter),
+            use_supertrend_filter=True,
             supertrend_timeframe=trial.suggest_categorical('supertrend_timeframe', self.ranges.supertrend_timeframe),
             supertrend_period=trial.suggest_categorical('supertrend_period', self.ranges.supertrend_period),
             supertrend_multiplier=trial.suggest_categorical('supertrend_multiplier', self.ranges.supertrend_multiplier),
-            require_bullish_supertrend=trial.suggest_categorical('require_bullish_supertrend', self.ranges.require_bullish_supertrend),
+            require_bullish_supertrend=False,
             max_acceptable_drawdown=self.ranges.max_acceptable_drawdown,
 
             # Fixed
@@ -366,39 +357,35 @@ class MarketOptimizationRanges:
     def bull_market() -> OptimizationRanges:
         """Ranges optimized for bull markets"""
         return OptimizationRanges(
-            # FIXED: With volume_multiplier=1.5 and max_safeties=8, max base is 1.33% for 100% limit
-            base_percent=[0.75, 1.0, 1.25, 1.33],                   # Limited to stay under 100%
-            volume_multiplier=[1.5],                                # Fixed multiplier
-            max_safeties=[8],                                       # Fixed max safeties
-            tp_level1=[3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0],       # Higher TPs
-            tp_percent1=[100.0],  # Single TP - sell all position
-            rsi_entry_threshold=[45.0, 50.0, 55.0, 60.0, 65.0],    # More entries
-            trailing_deviation=[2.0, 3.0, 4.0, 5.0]                # Wider stops
+            base_percent=[1.33],
+            volume_multiplier=[1.5],
+            max_safeties=[8],
+            tp_level1=[3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0],
+            tp_percent1=[100.0],
+            trailing_deviation=[2.0, 3.0, 4.0, 5.0]
         )
 
     @staticmethod
     def bear_market() -> OptimizationRanges:
         """Ranges optimized for bear markets"""
         return OptimizationRanges(
-            base_percent=[0.5, 0.75, 1.0, 1.25, 1.33],              # Limited to stay under 100%
-            volume_multiplier=[1.5],                                # Fixed multiplier
-            max_safeties=[8],                                       # Fixed max safeties
-            tp_level1=[1.0, 1.5, 2.0, 2.5, 3.0],                    # Lower TPs
-            tp_percent1=[100.0],  # Single TP - sell all position
-            rsi_entry_threshold=[25.0, 30.0, 35.0, 40.0, 45.0],     # Conservative entries
-            trailing_deviation=[0.5, 1.0, 1.5, 2.0]                 # Tighter stops
+            base_percent=[1.33],
+            volume_multiplier=[1.5],
+            max_safeties=[8],
+            tp_level1=[1.0, 1.5, 2.0, 2.5, 3.0],
+            tp_percent1=[100.0],
+            trailing_deviation=[0.5, 1.0, 1.5, 2.0]
         )
 
     @staticmethod
     def sideways_market() -> OptimizationRanges:
         """Ranges optimized for sideways markets"""
         return OptimizationRanges(
-            base_percent=[0.5, 0.75, 1.0, 1.25, 1.33],              # Limited to stay under 100%
-            volume_multiplier=[1.5],                                # Fixed multiplier
-            max_safeties=[8],                                       # Fixed max safeties
+            base_percent=[1.33],
+            volume_multiplier=[1.5],
+            max_safeties=[8],
             tp_level1=[1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
-            tp_percent1=[100.0],  # Single TP - sell all position
-            rsi_entry_threshold=[35.0, 40.0, 45.0, 50.0, 55.0],
+            tp_percent1=[100.0],
             trailing_deviation=[1.0, 1.5, 2.0, 2.5, 3.0]
         )
 
@@ -413,7 +400,6 @@ if __name__ == "__main__":
     print(f"Default Strategy:")
     print(f"  Base %: {default.base_percent}%")
     print(f"  TP1: {default.tp_level1}% (sell {default.tp_percent1}%)")
-    print(f"  RSI Entry: < {default.rsi_entry_threshold}")
     print()
 
     # Bull market preset
@@ -421,7 +407,6 @@ if __name__ == "__main__":
     print(f"Bull Market Strategy:")
     print(f"  Base %: {bull.base_percent}%")
     print(f"  TP1: {bull.tp_level1}% (sell {bull.tp_percent1}%)")
-    print(f"  RSI Entry: < {bull.rsi_entry_threshold}")
     print()
 
     # Optimization ranges
