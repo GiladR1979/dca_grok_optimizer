@@ -83,7 +83,10 @@ class FastDataProcessor:
 
     @staticmethod
     def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> Tuple[np.ndarray, np.ndarray]:
-        """Fast SuperTrend calculation with small dataset handling"""
+        """
+        Calculate SuperTrend indicator - optimized for Supertrend-based DCA strategy
+        Returns: (supertrend_values, trend_direction) where trend_direction: 1=bullish, -1=bearish
+        """
         try:
             # Handle small datasets - adjust period if necessary
             if len(df) < period:
@@ -92,20 +95,16 @@ class FastDataProcessor:
                     # Return neutral values for very small datasets
                     return df['close'].values, np.ones(len(df))
 
-            # Calculate ATR with adjusted period
-            atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range()
-
-            if atr.isna().all() or len(df) < 2:
-                # Fallback calculation for small datasets
-                if len(df) >= 2:
-                    high_low = df['high'] - df['low']
-                    high_close = (df['high'] - df['close'].shift()).abs()
-                    low_close = (df['low'] - df['close'].shift()).abs()
-                    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-                    atr = true_range.rolling(window=min(period, len(df))).mean()
-                else:
-                    # Very small dataset - return neutral values
-                    return df['close'].values, np.ones(len(df))
+            # Calculate True Range components
+            high_low = df['high'] - df['low']
+            high_close = (df['high'] - df['close'].shift()).abs()
+            low_close = (df['low'] - df['close'].shift()).abs()
+            
+            # True Range is the maximum of the three
+            true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+            
+            # Calculate ATR (Average True Range)
+            atr = true_range.rolling(window=period).mean()
 
             # Calculate basic upper and lower bands
             hl2 = (df['high'] + df['low']) / 2.0
@@ -114,78 +113,62 @@ class FastDataProcessor:
 
             # Initialize SuperTrend arrays
             supertrend_values = np.full(len(df), np.nan)
-            trend_direction = np.full(len(df), 1)  # 1 for up, -1 for down
+            trend_direction = np.full(len(df), 1)  # 1 for bullish, -1 for bearish
 
-            # Fill initial values
-            if len(df) > 0:
-                first_valid_idx = atr.first_valid_index()
-                if first_valid_idx is not None:
-                    start_idx = df.index.get_loc(first_valid_idx)
-                    if start_idx < len(df):
-                        supertrend_values[start_idx] = lower_band.iloc[start_idx]
-                        trend_direction[start_idx] = 1
+            # Start calculation from first valid ATR value
+            first_valid_idx = atr.first_valid_index()
+            if first_valid_idx is not None:
+                start_idx = df.index.get_loc(first_valid_idx)
+                
+                # Initialize first value
+                supertrend_values[start_idx] = lower_band.iloc[start_idx]
+                trend_direction[start_idx] = 1
 
-                        # Calculate SuperTrend iteratively - with bounds checking
-                        for i in range(start_idx + 1, min(len(df), len(supertrend_values))):
-                            if i >= len(df) or i-1 >= len(df):
-                                break
-                                
-                            prev_close = df['close'].iloc[i-1]
-                            curr_close = df['close'].iloc[i]
-                            prev_supertrend = supertrend_values[i-1]
-                            prev_trend = trend_direction[i-1]
+                # Calculate SuperTrend iteratively
+                for i in range(start_idx + 1, len(df)):
+                    prev_close = df['close'].iloc[i-1]
+                    curr_close = df['close'].iloc[i]
+                    prev_supertrend = supertrend_values[i-1]
+                    prev_trend = trend_direction[i-1]
 
-                            if i >= len(upper_band) or i >= len(lower_band):
-                                break
+                    curr_upper = upper_band.iloc[i]
+                    curr_lower = lower_band.iloc[i]
 
-                            curr_upper = upper_band.iloc[i]
-                            curr_lower = lower_band.iloc[i]
+                    # Calculate final upper and lower bands
+                    if curr_upper < prev_supertrend or prev_close > prev_supertrend:
+                        final_upper = curr_upper
+                    else:
+                        final_upper = prev_supertrend
 
-                            # Upper band calculation
-                            if not np.isnan(prev_close) and not np.isnan(prev_supertrend):
-                                if curr_upper < prev_supertrend or prev_close > prev_supertrend:
-                                    final_upper = curr_upper
-                                else:
-                                    final_upper = prev_supertrend
-                            else:
-                                final_upper = curr_upper
+                    if curr_lower > prev_supertrend or prev_close < prev_supertrend:
+                        final_lower = curr_lower
+                    else:
+                        final_lower = prev_supertrend
 
-                            # Lower band calculation
-                            if not np.isnan(prev_close) and not np.isnan(prev_supertrend):
-                                if curr_lower > prev_supertrend or prev_close < prev_supertrend:
-                                    final_lower = curr_lower
-                                else:
-                                    final_lower = prev_supertrend
-                            else:
-                                final_lower = curr_lower
+                    # Determine SuperTrend value and direction
+                    if prev_trend == 1:  # Was bullish
+                        if curr_close <= final_lower:
+                            # Trend flips to bearish
+                            trend_direction[i] = -1
+                            supertrend_values[i] = final_upper
+                        else:
+                            # Trend remains bullish
+                            trend_direction[i] = 1
+                            supertrend_values[i] = final_lower
+                    else:  # Was bearish (prev_trend == -1)
+                        if curr_close >= final_upper:
+                            # Trend flips to bullish
+                            trend_direction[i] = 1
+                            supertrend_values[i] = final_lower
+                        else:
+                            # Trend remains bearish
+                            trend_direction[i] = -1
+                            supertrend_values[i] = final_upper
 
-                            # Determine trend direction
-                            if prev_trend == 1:
-                                if curr_close <= final_lower:
-                                    trend_direction[i] = -1
-                                    supertrend_values[i] = final_upper
-                                else:
-                                    trend_direction[i] = 1
-                                    supertrend_values[i] = final_lower
-                            else:  # prev_trend == -1
-                                if curr_close >= final_upper:
-                                    trend_direction[i] = 1
-                                    supertrend_values[i] = final_lower
-                                else:
-                                    trend_direction[i] = -1
-                                    supertrend_values[i] = final_upper
-
-            # Fill any remaining NaN values
+            # Fill any remaining NaN values with close prices and neutral direction
             mask = np.isnan(supertrend_values)
             if mask.any():
-                valid_indices = np.where(~mask)[0]
-                if len(valid_indices) > 0:
-                    # Use the last valid value for NaN values
-                    last_valid = supertrend_values[valid_indices[-1]]
-                    supertrend_values[mask] = last_valid
-                else:
-                    # No valid values - use close prices
-                    supertrend_values[mask] = df['close'].iloc[mask].values
+                supertrend_values[mask] = df['close'].iloc[mask].values
                 trend_direction[mask] = 1
 
             return supertrend_values, trend_direction
@@ -646,86 +629,45 @@ def enhanced_simulate_strategy(
         current_sma_fast = sma_fast[i] if i < len(sma_fast) else current_price
         current_sma_slow = sma_slow[i] if i < len(sma_slow) else current_price
 
-        # 1. CHECK FOR NEW DEAL ENTRY (only if no active deal)
+        # 1. SUPERTREND-BASED DEAL ENTRY (only if no active deal)
         if not active_deal:
-            # Basic conditions
-            rsi_entry_ok = current_rsi_1h < rsi_entry_thresh
-            sma_ok = current_sma_fast > current_sma_slow
-            cooldown_ok = (i - last_close_step) >= 5
+            # Get current SuperTrend direction based on selected timeframe
+            if supertrend_timeframe == 0:  # 15m (mapped to 1h for now)
+                current_supertrend_direction = supertrend_direction_1h[i] if i < len(supertrend_direction_1h) else 1.0
+            elif supertrend_timeframe == 1:  # 30m (mapped to 1h for now) 
+                current_supertrend_direction = supertrend_direction_1h[i] if i < len(supertrend_direction_1h) else 1.0
+            elif supertrend_timeframe == 2:  # 1h
+                current_supertrend_direction = supertrend_direction_1h[i] if i < len(supertrend_direction_1h) else 1.0
+            else:  # 4h
+                current_supertrend_direction = supertrend_direction_4h[i] if i < len(supertrend_direction_4h) else 1.0
 
-            # 3commas conditional filters to avoid massive drawdowns
-            trend_filter_ok = True
-            volatility_filter_ok = True
-            structure_filter_ok = True
-            volume_filter_ok = True
-            supertrend_filter_ok = True
+            # Get previous SuperTrend direction to detect flips
+            prev_supertrend_direction = 1.0
+            if i > 0:
+                if supertrend_timeframe == 0:  # 15m (mapped to 1h for now)
+                    prev_supertrend_direction = supertrend_direction_1h[i-1] if i-1 < len(supertrend_direction_1h) else 1.0
+                elif supertrend_timeframe == 1:  # 30m (mapped to 1h for now)
+                    prev_supertrend_direction = supertrend_direction_1h[i-1] if i-1 < len(supertrend_direction_1h) else 1.0
+                elif supertrend_timeframe == 2:  # 1h
+                    prev_supertrend_direction = supertrend_direction_1h[i-1] if i-1 < len(supertrend_direction_1h) else 1.0
+                else:  # 4h
+                    prev_supertrend_direction = supertrend_direction_4h[i-1] if i-1 < len(supertrend_direction_4h) else 1.0
 
-            # SMA trend filter
-            if sma_trend_filter:
-                if sma_trend_period == 50:
-                    trend_filter_ok = current_price > sma_50[i] if i < len(sma_50) else True
-                elif sma_trend_period == 100:
-                    trend_filter_ok = current_price > sma_100[i] if i < len(sma_100) else True
-                elif sma_trend_period == 200:
-                    trend_filter_ok = current_price > sma_200[i] if i < len(sma_200) else True
-
-            # EMA trend filter
-            if ema_trend_filter:
-                if ema_trend_period == 21:
-                    trend_filter_ok = trend_filter_ok and (current_price > ema_21[i] if i < len(ema_21) else True)
-                elif ema_trend_period == 50:
-                    trend_filter_ok = trend_filter_ok and (current_price > ema_50[i] if i < len(ema_50) else True)
-                elif ema_trend_period == 100:
-                    trend_filter_ok = trend_filter_ok and (current_price > ema_100[i] if i < len(ema_100) else True)
-
-            # ATR volatility filter (avoid entering during extreme volatility)
-            if atr_volatility_filter and i > 0:
-                if atr_period == 14:
-                    current_atr = atr_14[i] if i < len(atr_14) else 0.0
-                elif atr_period == 21:
-                    current_atr = atr_21[i] if i < len(atr_21) else 0.0
-                else:  # 28
-                    current_atr = atr_28[i] if i < len(atr_28) else 0.0
-
-                # Don't enter if recent price movement exceeds ATR threshold
-                price_change = abs(current_price - prices[i-1])
-                volatility_filter_ok = price_change < (current_atr * atr_multiplier)
-
-            # Higher highs filter (market structure)
-            if higher_highs_filter and i >= higher_highs_period:
-                recent_high = 0.0
-                for j in range(max(0, i - higher_highs_period), i):
-                    if prices[j] > recent_high:
-                        recent_high = prices[j]
-                structure_filter_ok = current_price >= recent_high * 0.95  # Within 5% of recent high
-
-            # Volume confirmation
-            if volume_confirmation:
-                if volume_sma_period == 10:
-                    avg_volume = vol_sma_10[i] if i < len(vol_sma_10) else volume[i]
-                elif volume_sma_period == 20:
-                    avg_volume = vol_sma_20[i] if i < len(vol_sma_20) else volume[i]
-                else:  # 30
-                    avg_volume = vol_sma_30[i] if i < len(vol_sma_30) else volume[i]
-
-                current_volume = volume[i] if i < len(volume) else 0.0
-                volume_filter_ok = current_volume > avg_volume * 0.8  # At least 80% of average volume
-
-            # SuperTrend filter for drawdown elimination
-            if use_supertrend_filter and require_bullish_supertrend:
-                if supertrend_timeframe == 0:  # 1h
-                    supertrend_direction = supertrend_direction_1h[i] if i < len(supertrend_direction_1h) else 1.0
-                elif supertrend_timeframe == 1:  # 4h
-                    supertrend_direction = supertrend_direction_4h[i] if i < len(supertrend_direction_4h) else 1.0
-                else:  # 1d
-                    supertrend_direction = supertrend_direction_1d[i] if i < len(supertrend_direction_1d) else 1.0
-
-                supertrend_filter_ok = supertrend_direction > 0  # 1 = bullish, -1 = bearish
-
-            # Combined entry condition with all filters (including SuperTrend)
-            if (rsi_entry_ok and sma_ok and cooldown_ok and
-                trend_filter_ok and volatility_filter_ok and
-                structure_filter_ok and volume_filter_ok and supertrend_filter_ok):
+            # SUPERTREND DEAL LOGIC: Open deals consecutively when SuperTrend shows direction
+            # Enter LONG deals when SuperTrend is bullish (direction = 1)
+            # Enter SHORT deals when SuperTrend is bearish (direction = -1)
+            
+            cooldown_ok = (i - last_close_step) >= 5  # Basic cooldown
+            
+            # DUAL DIRECTION LOGIC: Support both LONG and SHORT deals
+            supertrend_bullish = current_supertrend_direction > 0
+            supertrend_bearish = current_supertrend_direction < 0
+            
+            # Enter LONG deal if SuperTrend is bullish
+            # Enter SHORT deal if SuperTrend is bearish
+            if (supertrend_bullish or supertrend_bearish) and cooldown_ok:
+                # Determine deal direction
+                deal_side = 1 if supertrend_bullish else -1  # 1 = LONG, -1 = SHORT
 
                 # Pre-calculate all order sizes based on initial balance at deal start
                 deal_start_balance = balance
@@ -734,10 +676,16 @@ def enhanced_simulate_strategy(
                 if base_amount_usdt > 1.0:
                     fee_amount = base_amount_usdt * fees
                     net_amount_usdt = base_amount_usdt - fee_amount
-                    coin_amount = net_amount_usdt / current_price
+                    
+                    if deal_side == 1:  # LONG deal
+                        coin_amount = net_amount_usdt / current_price
+                        balance -= base_amount_usdt
+                        position_size = coin_amount  # Positive for LONG
+                    else:  # SHORT deal (deal_side == -1)
+                        coin_amount = net_amount_usdt / current_price
+                        balance += net_amount_usdt  # Add USDT from short sale
+                        position_size = -coin_amount  # Negative for SHORT
 
-                    balance -= base_amount_usdt
-                    position_size = coin_amount
                     total_spent = base_amount_usdt
                     average_entry = current_price
                     last_entry_price = current_price
@@ -748,21 +696,30 @@ def enhanced_simulate_strategy(
                     trailing_active = False
                     num_trades += 1
                     
-                    # Store the deal start balance for safety order calculations
+                    # Store the deal start balance and side for safety order calculations
                     deal_balance = deal_start_balance
+                    deal_direction = deal_side  # Store deal direction
 
-        # 2. ACTIVE DEAL MANAGEMENT (same as before)
+        # 2. ACTIVE DEAL MANAGEMENT - DUAL DIRECTION SUPPORT
         if active_deal:
-            # Safety orders
+            # Safety orders - handle both LONG and SHORT
             if safety_count < max_safeties:
                 current_deviation = initial_deviation
                 for j in range(safety_count):
                     current_deviation *= step_multiplier
 
-                price_drop_threshold = last_entry_price * (1.0 - current_deviation / 100.0)
+                # For LONG deals: buy more when price drops
+                # For SHORT deals: sell more when price rises
+                if deal_direction == 1:  # LONG deal
+                    price_threshold = last_entry_price * (1.0 - current_deviation / 100.0)
+                    safety_trigger = current_price <= price_threshold
+                else:  # SHORT deal
+                    price_threshold = last_entry_price * (1.0 + current_deviation / 100.0)
+                    safety_trigger = current_price >= price_threshold
+
                 safety_rsi_ok = current_rsi_1h < rsi_safety_thresh
 
-                if current_price <= price_drop_threshold and safety_rsi_ok:
+                if safety_trigger and safety_rsi_ok:
                     safety_multiplier = volume_multiplier ** safety_count
                     # Use deal start balance for consistent order sizing
                     safety_base = deal_balance * (base_percent / 100.0)
@@ -776,51 +733,106 @@ def enhanced_simulate_strategy(
                         net_amount_usdt = safety_amount_usdt - fee_amount
                         safety_coins = net_amount_usdt / current_price
 
-                        balance -= safety_amount_usdt
-                        position_size += safety_coins
+                        if deal_direction == 1:  # LONG deal
+                            balance -= safety_amount_usdt
+                            position_size += safety_coins
+                        else:  # SHORT deal
+                            balance += net_amount_usdt  # Add USDT from short sale
+                            position_size -= safety_coins  # More negative position
+
                         total_spent += safety_amount_usdt
-                        average_entry = total_spent / position_size
+                        average_entry = total_spent / abs(position_size)
                         last_entry_price = current_price
                         safety_count += 1
                         num_trades += 1
 
-            # Take profit conditions - single TP target
-            if position_size > 0:
-                profit_percent = (current_price - average_entry) / average_entry * 100.0
+            # SUPERTREND EXIT LOGIC: Exit immediately when SuperTrend flips direction
+            supertrend_flip_exit = False
+            if deal_direction == 1 and current_supertrend_direction <= 0:  # LONG deal, SuperTrend turned bearish
+                supertrend_flip_exit = True
+            elif deal_direction == -1 and current_supertrend_direction >= 0:  # SHORT deal, SuperTrend turned bullish
+                supertrend_flip_exit = True
 
-                # Single TP - sell all position
-                if profit_percent >= tp_level1 and not tp_hit:
-                    tp_sell = position_size * tp_percent1  # Sell specified percentage
-                    tp_usdt_gross = tp_sell * current_price
-                    tp_fee = tp_usdt_gross * fees
-                    tp_usdt_net = tp_usdt_gross - tp_fee
+            # Take profit conditions - handle both LONG and SHORT
+            if position_size != 0:
+                if deal_direction == 1:  # LONG deal
+                    profit_percent = (current_price - average_entry) / average_entry * 100.0
+                else:  # SHORT deal
+                    profit_percent = (average_entry - current_price) / average_entry * 100.0
 
-                    balance += tp_usdt_net
-                    position_size -= tp_sell
+                # SUPERTREND IMMEDIATE EXIT: Exit when SuperTrend flips direction
+                if supertrend_flip_exit:
+                    # Immediate exit on SuperTrend flip - close entire position
+                    if deal_direction == 1:  # LONG deal
+                        exit_usdt_gross = abs(position_size) * current_price
+                        exit_fee = exit_usdt_gross * fees
+                        exit_usdt_net = exit_usdt_gross - exit_fee
+                        balance += exit_usdt_net
+                    else:  # SHORT deal
+                        buy_cost = abs(position_size) * current_price
+                        buy_fee = buy_cost * fees
+                        balance -= buy_cost + buy_fee
+
+                    position_size = 0.0
+                    active_deal = False
+                    trailing_active = False
+                    last_close_step = i
+                    num_trades += 1
+
+                # Regular TP conditions (only if not exited due to SuperTrend flip)
+                elif profit_percent >= tp_level1 and not tp_hit:
+                    if deal_direction == 1:  # LONG deal
+                        tp_sell = abs(position_size) * tp_percent1
+                        tp_usdt_gross = tp_sell * current_price
+                        tp_fee = tp_usdt_gross * fees
+                        tp_usdt_net = tp_usdt_gross - tp_fee
+                        balance += tp_usdt_net
+                        position_size -= tp_sell
+                    else:  # SHORT deal
+                        tp_buy = abs(position_size) * tp_percent1
+                        tp_usdt_gross = tp_buy * current_price
+                        tp_fee = tp_usdt_gross * fees
+                        tp_usdt_net = tp_usdt_gross + tp_fee
+                        balance -= tp_usdt_net
+                        position_size += tp_buy  # Less negative position
+
                     tp_hit = True
                     trailing_active = True
                     peak_price = current_price
                     num_trades += 1
 
-                    # If we sold 100%, close the deal
+                    # If we closed 100%, close the deal
                     if tp_percent1 >= 1.0:  # 100%
                         active_deal = False
                         trailing_active = False
+                        position_size = 0.0
 
-            # Trailing stop (same as before)
-            if trailing_active and position_size > 0:
-                if current_price > peak_price:
-                    peak_price = current_price
+            # Trailing stop (only if not exited due to SuperTrend flip)
+            if trailing_active and position_size != 0 and not supertrend_flip_exit:
+                if deal_direction == 1:  # LONG deal
+                    if current_price > peak_price:
+                        peak_price = current_price
+                    effective_trailing = min(trailing_deviation, tp_level1)
+                    trailing_threshold = peak_price * (1.0 - effective_trailing / 100.0)
+                    trailing_trigger = current_price <= trailing_threshold
+                else:  # SHORT deal
+                    if current_price < peak_price:
+                        peak_price = current_price
+                    effective_trailing = min(trailing_deviation, tp_level1)
+                    trailing_threshold = peak_price * (1.0 + effective_trailing / 100.0)
+                    trailing_trigger = current_price >= trailing_threshold
 
-                effective_trailing = min(trailing_deviation, tp_level1)
-                trailing_threshold = peak_price * (1.0 - effective_trailing / 100.0)
+                if trailing_trigger:
+                    if deal_direction == 1:  # LONG deal
+                        exit_usdt_gross = abs(position_size) * current_price
+                        exit_fee = exit_usdt_gross * fees
+                        exit_usdt_net = exit_usdt_gross - exit_fee
+                        balance += exit_usdt_net
+                    else:  # SHORT deal
+                        buy_cost = abs(position_size) * current_price
+                        buy_fee = buy_cost * fees
+                        balance -= buy_cost + buy_fee
 
-                if current_price <= trailing_threshold:
-                    exit_usdt_gross = position_size * current_price
-                    exit_fee = exit_usdt_gross * fees
-                    exit_usdt_net = exit_usdt_gross - exit_fee
-
-                    balance += exit_usdt_net
                     position_size = 0.0
                     active_deal = False
                     trailing_active = False

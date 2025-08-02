@@ -85,13 +85,13 @@ class OptimizationRanges:
             self.max_safeties = [8]
 
         if self.tp_level1 is None:
-            self.tp_level1 = [0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 10.0, 12, 14, 16, 20]
+            self.tp_level1 = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0]
 
         if self.tp_percent1 is None:
             self.tp_percent1 = [100]  # Single TP target - sell entire position
 
         if self.trailing_deviation is None:
-            self.trailing_deviation = [0.1, 0.2, 0.3, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+            self.trailing_deviation = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 16.0, 18.0, 19.8]
 
         if self.rsi_entry_threshold is None:
             self.rsi_entry_threshold = [30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0]
@@ -141,7 +141,7 @@ class OptimizationRanges:
             self.use_supertrend_filter = [True, False]  # 50% chance enabled for testing
 
         if self.supertrend_timeframe is None:
-            self.supertrend_timeframe = ['15m', '1h', '4h', '1d']
+            self.supertrend_timeframe = ['15m', '30m', '1h', '4h']
 
         if self.supertrend_period is None:
             self.supertrend_period = [7, 10, 14, 21]  # ATR periods to test
