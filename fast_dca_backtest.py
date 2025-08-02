@@ -1816,8 +1816,8 @@ class Visualizer:
                 balance_history = balance_history[::sample_rate]
                 print(f"Downsampled balance to {len(balance_history)} points for visualization")
 
-            # Create figure with multiple subplots (mac_branch style)
-            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 12))
+            # Create figure with 2 subplots (removed cumulative trade count)
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
             fig.suptitle(f'{coin} - DCA Strategy Backtest Results', fontsize=16, fontweight='bold')
 
             # Extract data
@@ -1841,70 +1841,51 @@ class Visualizer:
                     transform=ax1.transAxes, verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
-            # Subplot 2: Trade Analysis
+            # Subplot 2: Daily Trade Count Bar Chart
             if len(trades) > 0:
-                # Separate buy and sell trades
+                # Group trades by date and count them
+                trade_dates = []
+                for trade in trades:
+                    if hasattr(trade.timestamp, 'date'):
+                        trade_dates.append(trade.timestamp.date())
+                    else:
+                        trade_dates.append(pd.to_datetime(trade.timestamp).date())
+                
+                # Count trades per day
+                from collections import Counter
+                daily_trade_counts = Counter(trade_dates)
+                
+                # Convert to sorted lists for plotting
+                dates = sorted(daily_trade_counts.keys())
+                counts = [daily_trade_counts[date] for date in dates]
+                
+                # Create bar chart
+                ax2.bar(dates, counts, color='steelblue', alpha=0.7, width=1)
+                ax2.set_title('Daily Trade Count', fontweight='bold')
+                ax2.set_ylabel('Number of Trades per Day', fontweight='bold')
+                ax2.set_xlabel('Date', fontweight='bold')
+                ax2.grid(True, alpha=0.3, axis='y')
+                
+                # Add trade statistics
+                total_trades = len(trades)
+                avg_trades_per_day = total_trades / len(dates) if dates else 0
+                max_trades_per_day = max(counts) if counts else 0
+                
+                # Separate buy and sell trades for statistics
                 buy_trades = [t for t in trades if t.action == 'buy']
                 sell_trades = [t for t in trades if t.action == 'sell']
                 
-                # Plot trade volumes over time
-                if buy_trades:
-                    buy_times = [t.timestamp for t in buy_trades]
-                    buy_amounts = [t.usdt_amount for t in buy_trades]
-                    ax2.scatter(buy_times, buy_amounts, color='green', marker='^', 
-                              s=30, alpha=0.7, label=f'Buy Orders ({len(buy_trades)})')
-                
-                if sell_trades:
-                    sell_times = [t.timestamp for t in sell_trades]
-                    sell_amounts = [t.usdt_amount for t in sell_trades]
-                    ax2.scatter(sell_times, sell_amounts, color='red', marker='v', 
-                              s=30, alpha=0.7, label=f'Sell Orders ({len(sell_trades)})')
-                
-                ax2.set_title('Trade Volumes Over Time', fontweight='bold')
-                ax2.set_ylabel('USDT Amount', fontweight='bold')
-                ax2.legend()
-                ax2.grid(True, alpha=0.3)
-                
-                # Add trade statistics
-                total_buy_volume = sum(t.usdt_amount for t in buy_trades)
-                total_sell_volume = sum(t.usdt_amount for t in sell_trades)
-                ax2.text(0.02, 0.98, f'Total Buys: ${total_buy_volume:,.0f}\nTotal Sells: ${total_sell_volume:,.0f}', 
+                ax2.text(0.02, 0.98, f'Total Trades: {total_trades}\nAvg/Day: {avg_trades_per_day:.1f}\nMax/Day: {max_trades_per_day}\nBuys: {len(buy_trades)} | Sells: {len(sell_trades)}', 
                         transform=ax2.transAxes, verticalalignment='top',
-                        bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+                        bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
             else:
                 ax2.text(0.5, 0.5, 'No trades executed', ha='center', va='center', 
                         transform=ax2.transAxes, fontsize=14)
-                ax2.set_title('Trade Volumes Over Time', fontweight='bold')
+                ax2.set_title('Daily Trade Count', fontweight='bold')
+                ax2.set_xlabel('Date', fontweight='bold')
 
-            # Subplot 3: Cumulative Trade Count and Deal Analysis
-            if len(trades) > 0:
-                # Calculate cumulative trade count
-                trade_times = [t.timestamp for t in trades]
-                cumulative_trades = list(range(1, len(trades) + 1))
-                
-                ax3.plot(trade_times, cumulative_trades, 'purple', linewidth=2, label='Cumulative Trades')
-                ax3.set_title('Trading Activity Over Time', fontweight='bold')
-                ax3.set_ylabel('Cumulative Trade Count', fontweight='bold')
-                ax3.set_xlabel('Date', fontweight='bold')
-                ax3.grid(True, alpha=0.3)
-                ax3.legend()
-                
-                # Add deal analysis
-                base_orders = len([t for t in trades if 'base' in t.reason])
-                safety_orders = len([t for t in trades if 'safety' in t.reason])
-                take_profits = len([t for t in trades if 'profit' in t.reason or t.action == 'sell'])
-                
-                ax3.text(0.02, 0.98, f'Base Orders: {base_orders}\nSafety Orders: {safety_orders}\nTake Profits: {take_profits}', 
-                        transform=ax3.transAxes, verticalalignment='top',
-                        bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-            else:
-                ax3.text(0.5, 0.5, 'No trading activity', ha='center', va='center', 
-                        transform=ax3.transAxes, fontsize=14)
-                ax3.set_title('Trading Activity Over Time', fontweight='bold')
-                ax3.set_xlabel('Date', fontweight='bold')
-
-            # Format x-axis for all subplots
-            for ax in [ax1, ax2, ax3]:
+            # Format x-axis for both subplots
+            for ax in [ax1, ax2]:
                 try:
                     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
                     ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
