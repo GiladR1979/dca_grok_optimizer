@@ -5,10 +5,9 @@ Simple script to backtest a coin with the new Supertrend-based DCA strategy
 
 import argparse
 from pathlib import Path
+import json  # Added to fix NameError for json.dump
 from fast_dca_backtest import FastDataProcessor, FastBacktester, FastOptimizer, Visualizer
 from strategy_config import StrategyParams, OptimizationConfig
-import json
-
 
 def main():
     parser = argparse.ArgumentParser(description='Backtest coin with Supertrend DCA strategy')
@@ -17,6 +16,7 @@ def main():
     parser.add_argument('--optimize', action='store_true', help='Run optimization (recommended)')
     parser.add_argument('--trials', type=int, default=100, help='Number of optimization trials')
     parser.add_argument('--initial_balance', type=float, default=10000, help='Starting balance in USDT')
+    parser.add_argument('--max-apy-only', action='store_true', help='Maximize APY only during optimization (ignore drawdown penalties)')
 
     args = parser.parse_args()
 
@@ -43,7 +43,7 @@ def main():
         print("This will find the best Supertrend timeframe, TP levels, and other parameters")
 
         # Create optimizer with Supertrend-focused configuration
-        optimizer = FastOptimizer(backtester, OptimizationConfig())
+        optimizer = FastOptimizer(backtester, OptimizationConfig(), max_apy_only=args.max_apy_only)
 
         # Run optimization
         best_params = optimizer.optimize_fast(args.trials)
@@ -88,7 +88,7 @@ def main():
         print(f"\n🏆 BACKTEST RESULTS FOR {args.coin}")
         print("=" * 60)
         print(f"💰 Initial Balance: ${args.initial_balance:,.2f}")
-        print(f"💰 Final Balance: ${args.initial_balance * (1 + apy / 100):,.2f}")
+        print(f"💰 Final Balance: ${args.initial_balance * (1 + apy/100):,.2f}")
         print(f"📈 APY: {apy:.2f}%")
         print(f"📉 Max Drawdown: {max_drawdown:.2f}%")
         print(f"🔄 Total Trades: {len(trades)}")
@@ -120,7 +120,7 @@ def main():
         results = {
             'coin': args.coin,
             'initial_balance': args.initial_balance,
-            'final_balance': args.initial_balance * (1 + apy / 100),
+            'final_balance': args.initial_balance * (1 + apy/100),
             'apy': apy,
             'max_drawdown': max_drawdown,
             'total_trades': len(trades),
@@ -157,7 +157,6 @@ def main():
         print(f"❌ Error in simulation: {e}")
         import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     main()

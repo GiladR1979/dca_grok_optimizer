@@ -43,13 +43,13 @@ except ImportError:
 # Check for GPU availability (optional)
 try:
     import torch
-
     GPU_AVAILABLE = torch.cuda.is_available()
     if GPU_AVAILABLE:
         print(f"GPU detected: {torch.cuda.get_device_name(0)}")
 except ImportError:
     GPU_AVAILABLE = False
     print("PyTorch not available - using CPU only mode")
+
 
 # Import centralized strategy configuration
 from strategy_config import StrategyParams, OptimizationConfig, StrategyPresets
@@ -82,8 +82,7 @@ class FastDataProcessor:
         return df
 
     @staticmethod
-    def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> Tuple[
-        np.ndarray, np.ndarray]:
+    def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate SuperTrend indicator - optimized for Supertrend-based DCA strategy
         Returns: (supertrend_values, trend_direction) where trend_direction: 1=bullish, -1=bearish
@@ -127,10 +126,10 @@ class FastDataProcessor:
 
                 # Calculate SuperTrend iteratively
                 for i in range(start_idx + 1, len(df)):
-                    prev_close = df['close'].iloc[i - 1]
+                    prev_close = df['close'].iloc[i-1]
                     curr_close = df['close'].iloc[i]
-                    prev_supertrend = supertrend_values[i - 1]
-                    prev_trend = trend_direction[i - 1]
+                    prev_supertrend = supertrend_values[i-1]
+                    prev_trend = trend_direction[i-1]
 
                     curr_upper = upper_band.iloc[i]
                     curr_lower = lower_band.iloc[i]
@@ -230,21 +229,11 @@ class FastDataProcessor:
         # Forward-fill to original timeframe using pandas reindex
         indicators = {
             # SuperTrend indicators (DRAWDOWN ELIMINATION)
-            'supertrend_direction_15m': pd.Series(supertrend_direction_15m, index=df_15m.index).reindex(df.index,
-                                                                                                        method='ffill').fillna(
-                1.0).values,
-            'supertrend_direction_30m': pd.Series(supertrend_direction_30m, index=df_30m.index).reindex(df.index,
-                                                                                                        method='ffill').fillna(
-                1.0).values,
-            'supertrend_direction_1h': pd.Series(supertrend_direction_1h, index=df_1h.index).reindex(df.index,
-                                                                                                     method='ffill').fillna(
-                1.0).values,
-            'supertrend_direction_4h': pd.Series(supertrend_direction_4h, index=df_4h.index).reindex(df.index,
-                                                                                                     method='ffill').fillna(
-                1.0).values,
-            'supertrend_direction_1d': pd.Series(supertrend_direction_1d, index=df_1d.index).reindex(df.index,
-                                                                                                     method='ffill').fillna(
-                1.0).values,
+            'supertrend_direction_15m': pd.Series(supertrend_direction_15m, index=df_15m.index).reindex(df.index, method='ffill').fillna(1.0).values,
+            'supertrend_direction_30m': pd.Series(supertrend_direction_30m, index=df_30m.index).reindex(df.index, method='ffill').fillna(1.0).values,
+            'supertrend_direction_1h': pd.Series(supertrend_direction_1h, index=df_1h.index).reindex(df.index, method='ffill').fillna(1.0).values,
+            'supertrend_direction_4h': pd.Series(supertrend_direction_4h, index=df_4h.index).reindex(df.index, method='ffill').fillna(1.0).values,
+            'supertrend_direction_1d': pd.Series(supertrend_direction_1d, index=df_1d.index).reindex(df.index, method='ffill').fillna(1.0).values,
         }
 
         # Cache the results
@@ -272,8 +261,7 @@ def enhanced_simulate_strategy_with_trades(
     # Run the numba-optimized simulation first
     final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
         prices,
-        supertrend_direction_15m, supertrend_direction_30m, supertrend_direction_1h, supertrend_direction_4h,
-        supertrend_direction_1d,
+        supertrend_direction_15m, supertrend_direction_30m, supertrend_direction_1h, supertrend_direction_4h, supertrend_direction_1d,
         params_array, initial_balance
     )
 
@@ -379,8 +367,7 @@ def enhanced_simulate_strategy_with_trades(
                     safety_trigger = current_price >= price_threshold
 
                 if safety_trigger:
-                    safety_amount_usdt = initial_balance * (base_percent / 100.0) * (
-                                volume_multiplier ** (safety_count + 1))
+                    safety_amount_usdt = initial_balance * (base_percent / 100.0) * (volume_multiplier ** (safety_count + 1))
 
                     if safety_amount_usdt > 1.0 and safety_amount_usdt <= balance:
                         safety_coins = safety_amount_usdt / current_price
@@ -688,22 +675,22 @@ def enhanced_simulate_strategy(
                     trailing_threshold = peak_price * (1.0 + effective_trailing / 100.0)
                     trailing_trigger = current_price >= trailing_threshold
 
-                if trailing_trigger:
-                    if deal_direction == 1:
-                        exit_usdt_gross = position_size * current_price
-                        exit_fee = exit_usdt_gross * fees
-                        exit_usdt_net = exit_usdt_gross - exit_fee
-                        balance += exit_usdt_net
-                    else:
-                        buy_cost = abs(position_size) * current_price
-                        buy_fee = buy_cost * fees
-                        balance -= buy_cost + buy_fee
+                    if trailing_trigger:
+                        if deal_direction == 1:
+                            exit_usdt_gross = position_size * current_price
+                            exit_fee = exit_usdt_gross * fees
+                            exit_usdt_net = exit_usdt_gross - exit_fee
+                            balance += exit_usdt_net
+                        else:
+                            buy_cost = abs(position_size) * current_price
+                            buy_fee = buy_cost * fees
+                            balance -= buy_cost + buy_fee
 
-                    position_size = 0.0
-                    active_deal = False
-                    trailing_active = False
-                    last_close_step = i
-                    num_trades += 1
+                        position_size = 0.0
+                        active_deal = False
+                        trailing_active = False
+                        last_close_step = i
+                        num_trades += 1
 
             # Close deal if position too small
             if abs(position_size) < 0.0001:
@@ -800,13 +787,14 @@ class FastBacktester:
 class FastOptimizer:
     """High-performance optimizer with parallel processing"""
 
-    def __init__(self, backtester: FastBacktester, optimization_config: OptimizationConfig = None):
+    def __init__(self, backtester: FastBacktester, optimization_config: OptimizationConfig = None, max_apy_only: bool = False):
         self.backtester = backtester
         self.best_fitness = -1000
         self.best_apy = 0
         self.best_drawdown = 100
         self.best_params = {}
         self.trial_count = 0
+        self.max_apy_only = max_apy_only  # New flag for pure APY maximization
         # Use centralized optimization configuration
         self.optimization_config = optimization_config or OptimizationConfig()
 
@@ -857,25 +845,29 @@ class FastOptimizer:
             years = days / 365.25
             apy = (pow(final_balance / self.backtester.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
 
-            # Enhanced fitness function heavily prioritizing APY:
-            # 1. Higher APY (80% weight) - MOST IMPORTANT
-            # 2. Lower max drawdown (15% weight)
-            # 3. Shorter drawdown duration (5% weight)
+            # Fitness: If max_apy_only, pure APY; else original balanced
+            if self.max_apy_only:
+                fitness = apy
+            else:
+                # Enhanced fitness function heavily prioritizing APY:
+                # 1. Higher APY (80% weight) - MOST IMPORTANT
+                # 2. Lower max drawdown (15% weight)
+                # 3. Shorter drawdown duration (5% weight)
 
-            # Convert drawdown duration from minutes to hours for better scaling
-            avg_drawdown_hours = avg_drawdown_duration / 60.0
+                # Convert drawdown duration from minutes to hours for better scaling
+                avg_drawdown_hours = avg_drawdown_duration / 60.0
 
-            # Light penalty for long drawdowns (normalize to reasonable scale)
-            drawdown_duration_penalty = min(avg_drawdown_hours / 168.0, 2.0)  # Cap at 2x penalty, weekly scale
+                # Light penalty for long drawdowns (normalize to reasonable scale)
+                drawdown_duration_penalty = min(avg_drawdown_hours / 168.0, 2.0)  # Cap at 2x penalty, weekly scale
 
-            # Light penalty for high drawdowns (allow up to 40% before heavy penalty)
-            drawdown_penalty = max(0, max_drawdown - 40.0) * 0.5  # Only penalize above 40%
+                # Light penalty for high drawdowns (allow up to 40% before heavy penalty)
+                drawdown_penalty = max(0, max_drawdown - 40.0) * 0.5  # Only penalize above 40%
 
-            fitness = (
-                    0.8 * apy -  # Maximize APY (80% - PRIORITY)
-                    0.15 * drawdown_penalty -  # Light drawdown penalty (15%)
-                    0.05 * drawdown_duration_penalty  # Very light duration penalty (5%)
-            )
+                fitness = (
+                        0.8 * apy -                           # Maximize APY (80% - PRIORITY)
+                        0.15 * drawdown_penalty -             # Light drawdown penalty (15%)
+                        0.05 * drawdown_duration_penalty      # Very light duration penalty (5%)
+                )
 
             # Update best results
             if fitness > self.best_fitness:
@@ -1016,11 +1008,9 @@ class FastOptimizer:
                 if not hasattr(trend_optimizer, 'debug_count'):
                     trend_optimizer.debug_count = 0
                 if trend_optimizer.debug_count < 3:
-                    print(
-                        f"DEBUG Phase1 Trial {trend_optimizer.debug_count}: final_balance={final_balance:.2f}, initial={self.backtester.initial_balance:.2f}")
+                    print(f"DEBUG Phase1 Trial {trend_optimizer.debug_count}: final_balance={final_balance:.2f}, initial={self.backtester.initial_balance:.2f}")
                     print(f"DEBUG: num_trades={num_trades}, max_drawdown={max_drawdown:.2f}%, apy={apy:.2f}%")
-                    print(
-                        f"DEBUG: SuperTrend={params.supertrend_timeframe}, SMA_filter={params.sma_trend_filter}, EMA_filter={params.ema_trend_filter}")
+                    print(f"DEBUG: SuperTrend={params.supertrend_timeframe}, SMA_filter={params.sma_trend_filter}, EMA_filter={params.ema_trend_filter}")
                 trend_optimizer.debug_count += 1
 
                 # FIXED: Focus purely on APY - allow up to 90 days drawdown duration
@@ -1040,9 +1030,12 @@ class FastOptimizer:
                 if avg_drawdown_days > 90.0:  # 90 days maximum as requested
                     return -100 - (avg_drawdown_days - 90.0)  # Very light penalty beyond 90 days
 
-                # FIXED: Phase 1 focuses almost entirely on APY (95% weight)
-                duration_penalty = min(avg_drawdown_days / 90.0, 1.0)  # Normalize to 90-day scale
-                fitness = 0.95 * apy - 0.05 * duration_penalty  # 95% APY, 5% duration penalty
+                # If max_apy_only, pure APY; else balanced
+                if self.max_apy_only:
+                    fitness = apy
+                else:
+                    duration_penalty = min(avg_drawdown_days / 90.0, 1.0)  # Normalize to 90-day scale
+                    fitness = 0.95 * apy - 0.05 * duration_penalty  # 95% APY, 5% duration penalty
 
                 # Update trend-focused best results
                 if fitness > trend_optimizer.best_fitness:
@@ -1069,8 +1062,7 @@ class FastOptimizer:
         with tqdm(total=trend_trials, desc="Phase 1: Trend optimization",
                   bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
             def callback1(study, trial):
-                pbar.set_description(
-                    f"Phase 1: Best APY={trend_optimizer.best_apy:.1f}% DD={trend_optimizer.best_drawdown:.1f}%")
+                pbar.set_description(f"Phase 1: Best APY={trend_optimizer.best_apy:.1f}% DD={trend_optimizer.best_drawdown:.1f}%")
                 pbar.update(1)
 
             study_phase1.optimize(phase1_objective, n_trials=trend_trials, callbacks=[callback1])
@@ -1088,10 +1080,8 @@ class FastOptimizer:
             return StrategyParams()  # Return default params
 
         if hasattr(phase1_best, 'supertrend_timeframe'):
-            print(
-                f"SuperTrend: {phase1_best.supertrend_timeframe}, period={phase1_best.supertrend_period}, mult={phase1_best.supertrend_multiplier}")
-            print(
-                f"Filters: SMA={phase1_best.sma_trend_filter}, EMA={phase1_best.ema_trend_filter}, ATR={phase1_best.atr_volatility_filter}")
+            print(f"SuperTrend: {phase1_best.supertrend_timeframe}, period={phase1_best.supertrend_period}, mult={phase1_best.supertrend_multiplier}")
+            print(f"Filters: SMA={phase1_best.sma_trend_filter}, EMA={phase1_best.ema_trend_filter}, ATR={phase1_best.atr_volatility_filter}")
         else:
             print("Phase 1 parameters: Basic fallback configuration")
         print()
@@ -1190,9 +1180,12 @@ class FastOptimizer:
                 if avg_drawdown_days > 90.0:  # 90 days maximum as requested
                     return -100 - (avg_drawdown_days - 90.0)  # Very light penalty beyond 90 days
 
-                # FIXED: Phase 2 focuses almost entirely on APY (97% weight)
-                duration_penalty = min(avg_drawdown_days / 90.0, 1.0)  # Normalize to 90-day scale
-                fitness = 0.97 * apy - 0.03 * duration_penalty  # 97% APY, 3% duration penalty (maximum APY focus)
+                # If max_apy_only, pure APY; else balanced
+                if self.max_apy_only:
+                    fitness = apy
+                else:
+                    duration_penalty = min(avg_drawdown_days / 90.0, 1.0)  # Normalize to 90-day scale
+                    fitness = 0.97 * apy - 0.03 * duration_penalty  # 97% APY, 3% duration penalty (maximum APY focus)
 
                 # Update final best results
                 if fitness > self.best_fitness:
@@ -1360,8 +1353,7 @@ class Visualizer:
                 buy_trades = [t for t in trades if t.action == 'buy']
                 sell_trades = [t for t in trades if t.action == 'sell']
 
-                ax2.text(0.02, 0.98,
-                         f'Total Trades: {total_trades}\nAvg/Day: {avg_trades_per_day:.1f}\nMax/Day: {max_trades_per_day}\nBuys: {len(buy_trades)} | Sells: {len(sell_trades)}',
+                ax2.text(0.02, 0.98, f'Total Trades: {total_trades}\nAvg/Day: {avg_trades_per_day:.1f}\nMax/Day: {max_trades_per_day}\nBuys: {len(buy_trades)} | Sells: {len(sell_trades)}',
                          transform=ax2.transAxes, verticalalignment='top',
                          bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
             else:
@@ -1525,8 +1517,7 @@ def main():
     # FIXED: Always use the proper simulation with realistic trade tracking
     print("Running full simulation with trades for visualization...")
     try:
-        apy, max_drawdown, balance_history_for_save, trades = Visualizer.simulate_with_trades(backtester,
-                                                                                              strategy_params)
+        apy, max_drawdown, balance_history_for_save, trades = Visualizer.simulate_with_trades(backtester, strategy_params)
         print(f"Full simulation completed: APY={apy:.2f}%, Max DD={max_drawdown:.2f}%")
     except Exception as e:
         print(f"❌ Error in final simulation: {e}")
@@ -1542,7 +1533,7 @@ def main():
         # For non-optimization runs, get additional metrics if needed
         pass  # Metrics already calculated above
 
-    final_balance = args.initial_balance * (1 + apy / 100)
+    final_balance = args.initial_balance * (1 + apy/100)
 
     # Results
     results = {
@@ -1551,7 +1542,7 @@ def main():
         'final_balance': final_balance,
         'apy': round(apy, 2),
         'max_drawdown': round(max_drawdown, 2),
-        'avg_drawdown_duration_hours': round(avg_drawdown_duration / 60, 1),
+        'avg_drawdown_duration_hours': round(avg_drawdown_duration/60, 1),
         'total_trades': num_trades,
         'parameters': {
             # DCA parameters
@@ -1585,7 +1576,7 @@ def main():
     print(f"Final Balance: ${final_balance:,.2f}")
     print(f"APY: {apy:.2f}%")
     print(f"Max Drawdown: {max_drawdown:.2f}%")
-    print(f"Avg Drawdown Duration: {avg_drawdown_duration / 60:.1f} hours")
+    print(f"Avg Drawdown Duration: {avg_drawdown_duration/60:.1f} hours")
     print(f"Total Trades: {num_trades}")
     print("=" * 60)
 
