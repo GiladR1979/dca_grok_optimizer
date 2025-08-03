@@ -891,7 +891,7 @@ class FastOptimizer:
         optuna.logging.set_verbosity(optuna.logging.WARNING)
         study = optuna.create_study(
             direction='maximize',
-            pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5)
+            # pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5)
         )
 
         # Progress bar
