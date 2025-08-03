@@ -127,6 +127,7 @@ def main():
             'parameters': {
                 'base_percent': strategy_params.base_percent,
                 'volume_multiplier': strategy_params.volume_multiplier,
+                'step_multiplier': strategy_params.step_multiplier,
                 'max_safeties': strategy_params.max_safeties,
                 'use_supertrend_filter': strategy_params.use_supertrend_filter,
                 'supertrend_timeframe': strategy_params.supertrend_timeframe,

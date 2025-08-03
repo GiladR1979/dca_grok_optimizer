@@ -282,9 +282,11 @@ def enhanced_simulate_strategy_with_trades(
     use_supertrend_filter = bool(params_array[6])
     supertrend_timeframe = int(params_array[7])
 
+    # Unpack step_multiplier (new)
+    step_multiplier = params_array[8]
+
     # Constants
-    step_multiplier = 1.5
-    volume_multiplier = 1.2
+    volume_multiplier = 1.5  # Consistent with StrategyParams
     max_safeties = 8
 
     # State variables
@@ -498,9 +500,11 @@ def enhanced_simulate_strategy(
     use_supertrend_filter = bool(params_array[6])
     supertrend_timeframe = int(params_array[7])
 
+    # Unpack step_multiplier (new)
+    step_multiplier = params_array[8]
+
     # Constants
-    step_multiplier = 1.5
-    volume_multiplier = 1.2
+    volume_multiplier = 1.5  # Consistent with StrategyParams
     max_safeties = 8
 
     # State variables
@@ -839,7 +843,8 @@ class FastOptimizer:
                 params.fees,
                 # SuperTrend drawdown elimination parameters
                 float(params.use_supertrend_filter),
-                float(supertrend_timeframe_idx)
+                float(supertrend_timeframe_idx),
+                params.step_multiplier  # Add step_multiplier for optimization
             ])
 
             final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
@@ -991,7 +996,8 @@ class FastOptimizer:
                     float(params.higher_highs_filter), float(params.higher_highs_period),
                     float(params.volume_confirmation), float(params.volume_sma_period),
                     float(params.use_supertrend_filter), float(supertrend_timeframe_idx),
-                    float(params.require_bullish_supertrend)
+                    float(params.require_bullish_supertrend),
+                    params.step_multiplier  # Add step_multiplier for optimization
                 ])
 
                 final_balance, max_drawdown, num_trades, _, avg_dd_duration = enhanced_simulate_strategy(
@@ -1147,7 +1153,8 @@ class FastOptimizer:
                     float(params.higher_highs_filter), float(params.higher_highs_period),
                     float(params.volume_confirmation), float(params.volume_sma_period),
                     float(params.use_supertrend_filter), float(supertrend_timeframe_idx),
-                    float(params.require_bullish_supertrend)
+                    float(params.require_bullish_supertrend),
+                    params.step_multiplier  # Add step_multiplier for optimization
                 ])
 
                 final_balance, max_drawdown, num_trades, _, avg_dd_duration = enhanced_simulate_strategy(
@@ -1258,7 +1265,8 @@ class Visualizer:
             params.fees,
             # SuperTrend parameters
             float(params.use_supertrend_filter),
-            float(supertrend_timeframe_idx)
+            float(supertrend_timeframe_idx),
+            params.step_multiplier  # Add step_multiplier for optimization
         ])
 
         # Run the actual DCA simulation with trade tracking
@@ -1617,3 +1625,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
