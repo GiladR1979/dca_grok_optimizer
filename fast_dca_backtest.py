@@ -64,6 +64,8 @@ class Trade:
     price: float
     usdt_amount: float
     reason: str
+    profit_loss: float = 0.0  # Added for P/L on closes
+    total_profit: float = 0.0  # Added for cumulative P/L
 
 
 class FastDataProcessor:
@@ -297,6 +299,7 @@ def enhanced_simulate_strategy_with_trades(
     peak_price = 0.0
     trailing_active = False
     deal_direction = 0  # 1 for long, -1 for short
+    cumulative_profit = 0.0  # Added for total_profit
 
     # Track actual trades
     for i in range(len(prices)):
@@ -403,13 +406,18 @@ def enhanced_simulate_strategy_with_trades(
                 exit_usdt_gross = abs(position_size) * current_price
                 exit_usdt_net = exit_usdt_gross * (1 - fees)
 
+                profit_loss = (exit_usdt_net - total_spent) if deal_direction == 1 else (total_spent - exit_usdt_net)  # P/L for this deal
+                cumulative_profit += profit_loss  # Update cumulative
+
                 trades.append(Trade(
                     timestamp=current_timestamp,
                     action='sell' if deal_direction == 1 else 'buy',
                     amount_coin=abs(position_size),
                     price=current_price,
                     usdt_amount=exit_usdt_net,
-                    reason='supertrend_flip'
+                    reason='supertrend_flip',
+                    profit_loss=profit_loss,
+                    total_profit=cumulative_profit
                 ))
 
                 if deal_direction == 1:
@@ -432,13 +440,18 @@ def enhanced_simulate_strategy_with_trades(
                     tp_usdt_gross = tp_sell * current_price
                     tp_usdt_net = tp_usdt_gross * (1 - fees)
 
+                    profit_loss = (tp_usdt_net - total_spent) if deal_direction == 1 else (total_spent - tp_usdt_net)  # P/L for this deal
+                    cumulative_profit += profit_loss  # Update cumulative
+
                     trades.append(Trade(
                         timestamp=current_timestamp,
                         action='sell' if deal_direction == 1 else 'buy',
                         amount_coin=tp_sell,
                         price=current_price,
                         usdt_amount=tp_usdt_net,
-                        reason='take_profit'
+                        reason='take_profit',
+                        profit_loss=profit_loss,
+                        total_profit=cumulative_profit
                     ))
 
                     if deal_direction == 1:
@@ -794,7 +807,7 @@ class FastOptimizer:
         self.best_drawdown = 100
         self.best_params = {}
         self.trial_count = 0
-        self.max_apy_only = max_apy_only  # New flag for pure APY maximization
+        self.max_apy_only = max_apy_only
         # Use centralized optimization configuration
         self.optimization_config = optimization_config or OptimizationConfig()
 
@@ -891,7 +904,7 @@ class FastOptimizer:
         optuna.logging.set_verbosity(optuna.logging.WARNING)
         study = optuna.create_study(
             direction='maximize',
-            # pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5)
+            pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5)
         )
 
         # Progress bar
@@ -1030,12 +1043,9 @@ class FastOptimizer:
                 if avg_drawdown_days > 90.0:  # 90 days maximum as requested
                     return -100 - (avg_drawdown_days - 90.0)  # Very light penalty beyond 90 days
 
-                # If max_apy_only, pure APY; else balanced
-                if self.max_apy_only:
-                    fitness = apy
-                else:
-                    duration_penalty = min(avg_drawdown_days / 90.0, 1.0)  # Normalize to 90-day scale
-                    fitness = 0.95 * apy - 0.05 * duration_penalty  # 95% APY, 5% duration penalty
+                # FIXED: Phase 1 focuses almost entirely on APY (95% weight)
+                duration_penalty = min(avg_drawdown_days / 90.0, 1.0)  # Normalize to 90-day scale
+                fitness = 0.95 * apy - 0.05 * duration_penalty  # 95% APY, 5% duration penalty
 
                 # Update trend-focused best results
                 if fitness > trend_optimizer.best_fitness:
@@ -1180,12 +1190,9 @@ class FastOptimizer:
                 if avg_drawdown_days > 90.0:  # 90 days maximum as requested
                     return -100 - (avg_drawdown_days - 90.0)  # Very light penalty beyond 90 days
 
-                # If max_apy_only, pure APY; else balanced
-                if self.max_apy_only:
-                    fitness = apy
-                else:
-                    duration_penalty = min(avg_drawdown_days / 90.0, 1.0)  # Normalize to 90-day scale
-                    fitness = 0.97 * apy - 0.03 * duration_penalty  # 97% APY, 3% duration penalty (maximum APY focus)
+                # FIXED: Phase 2 focuses almost entirely on APY (97% weight)
+                duration_penalty = min(avg_drawdown_days / 90.0, 1.0)  # Normalize to 90-day scale
+                fitness = 0.97 * apy - 0.03 * duration_penalty  # 97% APY, 3% duration penalty (maximum APY focus)
 
                 # Update final best results
                 if fitness > self.best_fitness:
@@ -1412,7 +1419,8 @@ class Visualizer:
                 'amount_coin': round(trade.amount_coin, 6),
                 'price': round(trade.price, 6),
                 'usdt_amount': round(trade.usdt_amount, 2),
-                'reason': trade.reason
+                'reason': trade.reason,
+                'profit_loss': round(trade.profit_loss, 2)
             })
 
         df_trades = pd.DataFrame(trades_data)
