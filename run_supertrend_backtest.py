@@ -55,27 +55,34 @@ def main():
         strategy_params = best_params
     else:
         print("\n📋 Using default Supertrend parameters...")
-        # Default Supertrend-optimized parameters
+        # Default Supertrend-optimized parameters (updated for long/short)
         strategy_params = StrategyParams(
-            # Position sizing (keep as is)
-            base_percent=1.33,
-            volume_multiplier=1.5,
-            max_safeties=8,
+            # Position sizing (keep as is, symmetric defaults)
+            base_percent_long=1.33,
+            base_percent_short=1.33,
+            volume_multiplier_long=1.5,
+            volume_multiplier_short=1.5,
+            max_safeties_long=8,
+            max_safeties_short=8,
 
-            # Supertrend settings
+            # Supertrend settings (shared)
             use_supertrend_filter=True,
             supertrend_timeframe='1h',
             supertrend_period=10,
             supertrend_multiplier=3.0,
             require_bullish_supertrend=True,
 
-            # TP settings
-            tp_level1=3.0,
-            tp_percent1=100.0,  # Sell entire position
-            trailing_deviation=2.0,
+            # TP settings (symmetric defaults)
+            tp_level1_long=3.0,
+            tp_level1_short=3.0,
+            tp_percent1_long=100.0,  # Sell entire position
+            tp_percent1_short=100.0,
+            trailing_deviation_long=2.0,
+            trailing_deviation_short=2.0,
 
-            # Entry/safety conditions (less important with Supertrend)
-            initial_deviation=2.5,
+            # Entry/safety conditions (less important with Supertrend, symmetric)
+            initial_deviation_long=2.5,
+            initial_deviation_short=2.5,
             rsi_entry_threshold=50.0,
             rsi_safety_threshold=40.0,
         )
@@ -99,8 +106,8 @@ def main():
         print(f"Timeframe: {strategy_params.supertrend_timeframe}")
         print(f"Period: {strategy_params.supertrend_period}")
         print(f"Multiplier: {strategy_params.supertrend_multiplier}")
-        print(f"TP Level: {strategy_params.tp_level1}%")
-        print(f"Trailing: {strategy_params.trailing_deviation}%")
+        print(f"TP Level: {strategy_params.tp_level1_long}%")  # Showing long as example; could expand
+        print(f"Trailing: {strategy_params.trailing_deviation_long}%")
 
         # Save results
         output_dir = Path('./results')
@@ -116,7 +123,7 @@ def main():
         Visualizer.save_trades_log(trades, str(trades_path))
         print(f"📋 Trades log saved: {trades_path}")
 
-        # Save JSON results (added)
+        # Save JSON results (updated for long/short params)
         results = {
             'coin': args.coin,
             'initial_balance': args.initial_balance,
@@ -125,19 +132,27 @@ def main():
             'max_drawdown': max_drawdown,
             'total_trades': len(trades),
             'parameters': {
-                'base_percent': strategy_params.base_percent,
-                'volume_multiplier': strategy_params.volume_multiplier,
-                'step_multiplier': strategy_params.step_multiplier,
-                'max_safeties': strategy_params.max_safeties,
+                'base_percent_long': strategy_params.base_percent_long,
+                'base_percent_short': strategy_params.base_percent_short,
+                'volume_multiplier_long': strategy_params.volume_multiplier_long,
+                'volume_multiplier_short': strategy_params.volume_multiplier_short,
+                'step_multiplier_long': strategy_params.step_multiplier_long,
+                'step_multiplier_short': strategy_params.step_multiplier_short,
+                'max_safeties_long': strategy_params.max_safeties_long,
+                'max_safeties_short': strategy_params.max_safeties_short,
                 'use_supertrend_filter': strategy_params.use_supertrend_filter,
                 'supertrend_timeframe': strategy_params.supertrend_timeframe,
                 'supertrend_period': strategy_params.supertrend_period,
                 'supertrend_multiplier': strategy_params.supertrend_multiplier,
                 'require_bullish_supertrend': strategy_params.require_bullish_supertrend,
-                'tp_level1': strategy_params.tp_level1,
-                'tp_percent1': strategy_params.tp_percent1,
-                'trailing_deviation': strategy_params.trailing_deviation,
-                'initial_deviation': strategy_params.initial_deviation,
+                'tp_level1_long': strategy_params.tp_level1_long,
+                'tp_level1_short': strategy_params.tp_level1_short,
+                'tp_percent1_long': strategy_params.tp_percent1_long,
+                'tp_percent1_short': strategy_params.tp_percent1_short,
+                'trailing_deviation_long': strategy_params.trailing_deviation_long,
+                'trailing_deviation_short': strategy_params.trailing_deviation_short,
+                'initial_deviation_long': strategy_params.initial_deviation_long,
+                'initial_deviation_short': strategy_params.initial_deviation_short,
                 'rsi_entry_threshold': strategy_params.rsi_entry_threshold,
                 'rsi_safety_threshold': strategy_params.rsi_safety_threshold,
             },
@@ -161,3 +176,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

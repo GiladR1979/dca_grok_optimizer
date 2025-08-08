@@ -270,24 +270,32 @@ def enhanced_simulate_strategy_with_trades(
     # Now run a Python version to track actual trades
     trades = []
 
-    # Unpack parameters
-    base_percent = params_array[0]
-    initial_deviation = params_array[1]
-    trailing_deviation = params_array[2]
-    tp_level1 = params_array[3]
-    tp_percent1 = params_array[4] / 100.0
-    fees = params_array[5] / 100.0
+    # Unpack parameters (now with separate long/short)
+    base_percent_long = params_array[0]
+    base_percent_short = params_array[1]
+    initial_deviation_long = params_array[2]
+    initial_deviation_short = params_array[3]
+    trailing_deviation_long = params_array[4]
+    trailing_deviation_short = params_array[5]
+    tp_level1_long = params_array[6]
+    tp_level1_short = params_array[7]
+    tp_percent1_long = params_array[8] / 100.0
+    tp_percent1_short = params_array[9] / 100.0
+    fees = params_array[10] / 100.0
 
-    # Unpack SuperTrend parameters
-    use_supertrend_filter = bool(params_array[6])
-    supertrend_timeframe = int(params_array[7])
+    # Unpack SuperTrend parameters (shared)
+    use_supertrend_filter = bool(params_array[11])
+    supertrend_timeframe = int(params_array[12])
 
-    # Unpack step_multiplier (new)
-    step_multiplier = params_array[8]
+    # Unpack step_multiplier (separate for long/short)
+    step_multiplier_long = params_array[13]
+    step_multiplier_short = params_array[14]
 
-    # Constants
-    volume_multiplier = 1.5  # Consistent with StrategyParams
-    max_safeties = 8
+    # Constants (separate for long/short if needed, but shared for now)
+    volume_multiplier_long = 1.5
+    volume_multiplier_short = 1.5
+    max_safeties_long = 8
+    max_safeties_short = 8
 
     # State variables
     balance = initial_balance
@@ -308,7 +316,7 @@ def enhanced_simulate_strategy_with_trades(
         current_price = prices[i]
         current_timestamp = timestamps[i]
 
-        # Select Supertrend direction based on timeframe
+        # Select Supertrend direction based on timeframe (shared)
         if supertrend_timeframe == 0:  # 15m
             supertrend_direction = supertrend_direction_15m[i] if i < len(supertrend_direction_15m) else 1.0
         elif supertrend_timeframe == 1:  # 30m
@@ -330,6 +338,8 @@ def enhanced_simulate_strategy_with_trades(
             if (supertrend_bullish or supertrend_bearish) and cooldown_ok:
                 deal_direction = 1 if supertrend_bullish else -1
 
+                # Use direction-specific params
+                base_percent = base_percent_long if deal_direction == 1 else base_percent_short
                 base_amount_usdt = initial_balance * (base_percent / 100.0)
 
                 if base_amount_usdt > 1.0 and base_amount_usdt <= balance:
@@ -358,6 +368,12 @@ def enhanced_simulate_strategy_with_trades(
 
         # Active deal management
         elif active_deal:
+            # Use direction-specific params for safety orders
+            initial_deviation = initial_deviation_long if deal_direction == 1 else initial_deviation_short
+            step_multiplier = step_multiplier_long if deal_direction == 1 else step_multiplier_short
+            volume_multiplier = volume_multiplier_long if deal_direction == 1 else volume_multiplier_short
+            max_safeties = max_safeties_long if deal_direction == 1 else max_safeties_short
+
             # Safety orders
             if safety_count < max_safeties:
                 current_deviation = initial_deviation
@@ -397,7 +413,7 @@ def enhanced_simulate_strategy_with_trades(
                         last_entry_price = current_price
                         safety_count += 1
 
-            # Check for Supertrend flip exit
+            # Check for Supertrend flip exit (shared logic)
             supertrend_flip_exit = False
             if deal_direction == 1 and supertrend_direction <= 0:
                 supertrend_flip_exit = True
@@ -430,8 +446,11 @@ def enhanced_simulate_strategy_with_trades(
                 active_deal = False
                 last_close_step = i
 
-            # Check for take profit
+            # Check for take profit (direction-specific)
             elif position_size != 0:
+                tp_level1 = tp_level1_long if deal_direction == 1 else tp_level1_short
+                tp_percent1 = tp_percent1_long if deal_direction == 1 else tp_percent1_short
+
                 if deal_direction == 1:
                     profit_percent = (current_price - average_entry) / average_entry * 100.0
                 else:
@@ -488,24 +507,32 @@ def enhanced_simulate_strategy(
     Returns: (final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration)
     """
 
-    # Unpack basic parameters
-    base_percent = params_array[0]
-    initial_deviation = params_array[1]
-    trailing_deviation = params_array[2]
-    tp_level1 = params_array[3]
-    tp_percent1 = params_array[4] / 100.0
-    fees = params_array[5] / 100.0
+    # Unpack basic parameters (now separate for long/short)
+    base_percent_long = params_array[0]
+    base_percent_short = params_array[1]
+    initial_deviation_long = params_array[2]
+    initial_deviation_short = params_array[3]
+    trailing_deviation_long = params_array[4]
+    trailing_deviation_short = params_array[5]
+    tp_level1_long = params_array[6]
+    tp_level1_short = params_array[7]
+    tp_percent1_long = params_array[8] / 100.0
+    tp_percent1_short = params_array[9] / 100.0
+    fees = params_array[10] / 100.0
 
-    # Unpack SuperTrend parameters
-    use_supertrend_filter = bool(params_array[6])
-    supertrend_timeframe = int(params_array[7])
+    # Unpack SuperTrend parameters (shared)
+    use_supertrend_filter = bool(params_array[11])
+    supertrend_timeframe = int(params_array[12])
 
-    # Unpack step_multiplier (new)
-    step_multiplier = params_array[8]
+    # Unpack step_multiplier (separate for long/short)
+    step_multiplier_long = params_array[13]
+    step_multiplier_short = params_array[14]
 
-    # Constants
-    volume_multiplier = 1.5  # Consistent with StrategyParams
-    max_safeties = 8
+    # Constants (separate if needed)
+    volume_multiplier_long = 1.5  # Consistent with StrategyParams
+    volume_multiplier_short = 1.5
+    max_safeties_long = 8
+    max_safeties_short = 8
 
     # State variables
     balance = initial_balance
@@ -536,7 +563,7 @@ def enhanced_simulate_strategy(
     for i in range(n_points):
         current_price = prices[i]
 
-        # Get current SuperTrend direction
+        # Get current SuperTrend direction (shared)
         if supertrend_timeframe == 0:  # 15m
             current_supertrend_direction = supertrend_direction_15m[i] if i < len(supertrend_direction_15m) else 1.0
         elif supertrend_timeframe == 1:  # 30m
@@ -558,6 +585,8 @@ def enhanced_simulate_strategy(
             if (supertrend_bullish or supertrend_bearish) and cooldown_ok:
                 deal_direction = 1 if supertrend_bullish else -1
 
+                # Direction-specific
+                base_percent = base_percent_long if deal_direction == 1 else base_percent_short
                 base_amount_usdt = initial_balance * (base_percent / 100.0)
 
                 if base_amount_usdt > 1.0:
@@ -584,6 +613,12 @@ def enhanced_simulate_strategy(
 
         # 2. ACTIVE DEAL MANAGEMENT
         if active_deal:
+            # Direction-specific params
+            initial_deviation = initial_deviation_long if deal_direction == 1 else initial_deviation_short
+            step_multiplier = step_multiplier_long if deal_direction == 1 else step_multiplier_short
+            volume_multiplier = volume_multiplier_long if deal_direction == 1 else volume_multiplier_short
+            max_safeties = max_safeties_long if deal_direction == 1 else max_safeties_short
+
             # Safety orders
             if safety_count < max_safeties:
                 current_deviation = initial_deviation
@@ -622,7 +657,7 @@ def enhanced_simulate_strategy(
                         safety_count += 1
                         num_trades += 1
 
-            # SUPERTREND EXIT LOGIC: Exit immediately when SuperTrend flips direction
+            # SUPERTREND EXIT LOGIC: Exit immediately when SuperTrend flips direction (shared)
             supertrend_flip_exit = False
             if deal_direction == 1 and current_supertrend_direction <= 0:
                 supertrend_flip_exit = True
@@ -646,8 +681,11 @@ def enhanced_simulate_strategy(
                 last_close_step = i
                 num_trades += 1
 
-            # Take profit conditions
+            # Take profit conditions (direction-specific)
             elif position_size != 0:
+                tp_level1 = tp_level1_long if deal_direction == 1 else tp_level1_short
+                tp_percent1 = tp_percent1_long if deal_direction == 1 else tp_percent1_short
+
                 if deal_direction == 1:
                     profit_percent = (current_price - average_entry) / average_entry * 100.0
                 else:
@@ -677,8 +715,10 @@ def enhanced_simulate_strategy(
                         position_size = 0.0
                         last_close_step = i
 
-            # Trailing stop
+            # Trailing stop (direction-specific)
             if trailing_active and position_size != 0 and not supertrend_flip_exit:
+                trailing_deviation = trailing_deviation_long if deal_direction == 1 else trailing_deviation_short
+
                 if deal_direction == 1:
                     if current_price > peak_price:
                         peak_price = current_price
@@ -692,22 +732,22 @@ def enhanced_simulate_strategy(
                     trailing_threshold = peak_price * (1.0 + effective_trailing / 100.0)
                     trailing_trigger = current_price >= trailing_threshold
 
-                    if trailing_trigger:
-                        if deal_direction == 1:
-                            exit_usdt_gross = position_size * current_price
-                            exit_fee = exit_usdt_gross * fees
-                            exit_usdt_net = exit_usdt_gross - exit_fee
-                            balance += exit_usdt_net
-                        else:
-                            buy_cost = abs(position_size) * current_price
-                            buy_fee = buy_cost * fees
-                            balance -= buy_cost + buy_fee
+                if trailing_trigger:
+                    if deal_direction == 1:
+                        exit_usdt_gross = position_size * current_price
+                        exit_fee = exit_usdt_gross * fees
+                        exit_usdt_net = exit_usdt_gross - exit_fee
+                        balance += exit_usdt_net
+                    else:
+                        buy_cost = abs(position_size) * current_price
+                        buy_fee = buy_cost * fees
+                        balance -= buy_cost + buy_fee
 
-                        position_size = 0.0
-                        active_deal = False
-                        trailing_active = False
-                        last_close_step = i
-                        num_trades += 1
+                    position_size = 0.0
+                    active_deal = False
+                    trailing_active = False
+                    last_close_step = i
+                    num_trades += 1
 
             # Close deal if position too small
             if abs(position_size) < 0.0001:
@@ -769,17 +809,26 @@ class FastBacktester:
     def simulate_strategy_fast(self, params: StrategyParams) -> Tuple[float, float, int, List]:
         """Ultra-fast simulation using numba - returns balance history for visualization"""
 
-        # Pack parameters into array for numba
+        # Pack parameters into array for numba (updated for long/short)
         params_array = np.array([
-            params.base_percent,
-            params.initial_deviation,
-            params.trailing_deviation,
-            params.tp_level1,
-            params.tp_percent1,
-            params.fees
+            params.base_percent_long,
+            params.base_percent_short,
+            params.initial_deviation_long,
+            params.initial_deviation_short,
+            params.trailing_deviation_long,
+            params.trailing_deviation_short,
+            params.tp_level1_long,
+            params.tp_level1_short,
+            params.tp_percent1_long,
+            params.tp_percent1_short,
+            params.fees,
+            float(params.use_supertrend_filter),
+            float(supertrend_timeframe_idx),  # Assuming you define this
+            params.step_multiplier_long,
+            params.step_multiplier_short
         ])
 
-        final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = fast_simulate_strategy(
+        final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
             self.prices,
             self.indicators['supertrend_direction_15m'],
             self.indicators['supertrend_direction_30m'],
@@ -823,28 +872,37 @@ class FastOptimizer:
         """Enhanced objective function optimizing for APY and shorter drawdown duration with 3commas filters"""
         params = self._suggest_params(trial)
 
-        # Validate trailing % doesn't exceed TP-0.2% to avoid losses
-        max_trailing = params.tp_level1 - 0.2
-        if params.trailing_deviation > max_trailing:
+        # Validate trailing % doesn't exceed TP-0.2% for both directions
+        max_trailing_long = params.tp_level1_long - 0.2
+        if params.trailing_deviation_long > max_trailing_long:
             return -1000  # Invalid configuration penalty
+        max_trailing_short = params.tp_level1_short - 0.2
+        if params.trailing_deviation_short > max_trailing_short:
+            return -1000
 
         try:
-            # Pack parameters including 3commas conditional filters and SuperTrend
+            # Pack parameters including 3commas conditional filters and SuperTrend (updated for long/short)
             # Map timeframe string to index for numba
             timeframe_map = {'15m': 0, '30m': 1, '1h': 2, '4h': 3, '1d': 4}
             supertrend_timeframe_idx = timeframe_map.get(params.supertrend_timeframe, 2)  # Default to 1h
 
             params_array = np.array([
-                params.base_percent,
-                params.initial_deviation,
-                params.trailing_deviation,
-                params.tp_level1,
-                params.tp_percent1,  # Single TP target only
+                params.base_percent_long,
+                params.base_percent_short,
+                params.initial_deviation_long,
+                params.initial_deviation_short,
+                params.trailing_deviation_long,
+                params.trailing_deviation_short,
+                params.tp_level1_long,
+                params.tp_level1_short,
+                params.tp_percent1_long,
+                params.tp_percent1_short,
                 params.fees,
                 # SuperTrend drawdown elimination parameters
                 float(params.use_supertrend_filter),
                 float(supertrend_timeframe_idx),
-                params.step_multiplier  # Add step_multiplier for optimization
+                params.step_multiplier_long,
+                params.step_multiplier_short
             ])
 
             final_balance, max_drawdown, num_trades, balance_history, avg_drawdown_duration = enhanced_simulate_strategy(
@@ -1257,16 +1315,22 @@ class Visualizer:
         supertrend_timeframe_idx = timeframe_map.get(params.supertrend_timeframe, 2)  # Default to 1h
 
         params_array = np.array([
-            params.base_percent,
-            params.initial_deviation,
-            params.trailing_deviation,
-            params.tp_level1,
-            params.tp_percent1,
+            params.base_percent_long,
+            params.base_percent_short,
+            params.initial_deviation_long,
+            params.initial_deviation_short,
+            params.trailing_deviation_long,
+            params.trailing_deviation_short,
+            params.tp_level1_long,
+            params.tp_level1_short,
+            params.tp_percent1_long,
+            params.tp_percent1_short,
             params.fees,
             # SuperTrend parameters
             float(params.use_supertrend_filter),
             float(supertrend_timeframe_idx),
-            params.step_multiplier  # Add step_multiplier for optimization
+            params.step_multiplier_long,
+            params.step_multiplier_short
         ])
 
         # Run the actual DCA simulation with trade tracking
