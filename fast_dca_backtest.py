@@ -1036,14 +1036,21 @@ class FastOptimizer:
         timeframe_map = {'15m': 0, '30m': 1, '1h': 2, '4h': 3, '1d': 4}
         supertrend_timeframe_idx = timeframe_map.get(params.supertrend_timeframe, 2)
         return np.array([
-            params.base_percent,
-            params.initial_deviation,
-            params.trailing_deviation,
-            params.tp_level1,
-            params.tp_percent1,
+            params.base_percent_long,
+            params.base_percent_short,
+            params.initial_deviation_long,
+            params.initial_deviation_short,
+            params.trailing_deviation_long,
+            params.trailing_deviation_short,
+            params.tp_level1_long,
+            params.tp_level1_short,
+            params.tp_percent1_long,
+            params.tp_percent1_short,
             params.fees,
             float(params.use_supertrend_filter),
-            float(supertrend_timeframe_idx)
+            float(supertrend_timeframe_idx),
+            params.step_multiplier_long,
+            params.step_multiplier_short
         ])
 
     def optimize_fast(self, n_trials: int = 500) -> Dict:
