@@ -18,7 +18,7 @@ def get_coins():
 
 
 def main():
-    trials = "2500"
+    trials = "10000"
 
     coins = get_coins()
     print(f"🚀 Running optimization for {len(coins)} coins with {trials} trials each")
@@ -27,7 +27,7 @@ def main():
 
     for i, coin in enumerate(coins, 1):
         print(f"📈 {i}/{len(coins)}: {coin}")
-        cmd = f'python run_supertrend_backtest.py --coin {coin} --data_path data/{coin}_1m.csv --optimize --trials {trials} --max-apy-only'
+        cmd = f'python run_supertrend_backtest.py --coin {coin} --data_path data/{coin}_1m.csv --optimize --trials {trials}'
         print(f"Running: {cmd}")
         print("-" * 60)
 
