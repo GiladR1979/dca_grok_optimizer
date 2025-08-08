@@ -961,6 +961,91 @@ class FastOptimizer:
             print(f"Trial failed: {e}")
             return -1000
 
+    def post_optimize_monte_carlo(self, study: optuna.Study, n_mc_runs: int = 100, noise_std: float = 0.001):
+        """Post-optimization Monte Carlo validation on top 10% trials to check for curve fitting"""
+        print("\n🎲 Running Monte Carlo validation on top 10% of trials...")
+
+        # Get all trials sorted by fitness (descending)
+        trials_df = study.trials_dataframe().sort_values('value', ascending=False)
+
+        # Select top 10%
+        top_count = max(1, int(len(trials_df) * 0.1))
+        top_trials = trials_df.head(top_count)
+
+        robust_results = []
+        for idx, row in top_trials.iterrows():
+            # Reconstruct params from trial (Optuna stores params in row)
+            params_dict = {k.replace('params_', ''): row[k] for k in row.index if k.startswith('params_')}
+            params = StrategyParams(**params_dict)  # Assuming StrategyParams can take dict
+
+            # Run MC: Average APY and drawdown over n_mc_runs with noisy prices
+            mc_apys = []
+            mc_drawdowns = []
+            for _ in range(n_mc_runs):
+                # Randomize candles: Add Gaussian noise to prices
+                noisy_prices = self.backtester.prices * (1 + np.random.normal(0, noise_std, len(self.backtester.prices)))
+
+                # Re-run simulation with noisy prices
+                final_balance, max_drawdown, _, _, _ = enhanced_simulate_strategy(
+                    noisy_prices,
+                    self.backtester.indicators['supertrend_direction_15m'],
+                    self.backtester.indicators['supertrend_direction_30m'],
+                    self.backtester.indicators['supertrend_direction_1h'],
+                    self.backtester.indicators['supertrend_direction_4h'],
+                    self.backtester.indicators['supertrend_direction_1d'],
+                    self._pack_params(params),  # Helper to pack params_array
+                    self.backtester.initial_balance
+                )
+
+                # Calculate APY
+                days = (self.backtester.timestamps[-1] - self.backtester.timestamps[0]) / np.timedelta64(1, 'D')
+                years = days / 365.25
+                apy = (pow(final_balance / self.backtester.initial_balance, 1 / years) - 1) * 100 if years > 0 else 0
+
+                mc_apys.append(apy)
+                mc_drawdowns.append(max_drawdown)
+
+            # Compute MC stats
+            mc_apy_mean = np.mean(mc_apys)
+            mc_apy_std = np.std(mc_apys)
+            mc_drawdown_mean = np.mean(mc_drawdowns)
+
+            # MC-adjusted fitness (e.g., penalize high variance)
+            mc_fitness = mc_apy_mean - (mc_apy_std * 0.5) - (mc_drawdown_mean * 0.3)  # Example formula; adjustable
+
+            robust_results.append({
+                'trial_number': row['number'],
+                'original_fitness': row['value'],
+                'mc_apy_mean': mc_apy_mean,
+                'mc_apy_std': mc_apy_std,
+                'mc_drawdown_mean': mc_drawdown_mean,
+                'mc_fitness': mc_fitness,
+                'params': params
+            })
+
+        # Select the most robust (highest MC fitness)
+        if robust_results:
+            best_robust = max(robust_results, key=lambda x: x['mc_fitness'])
+            print(f"\n🏆 Most Robust Params (post-MC): Trial {best_robust['trial_number']}, MC APY Mean: {best_robust['mc_apy_mean']:.2f}%, MC Drawdown Mean: {best_robust['mc_drawdown_mean']:.2f}%")
+            self.best_params = best_robust['params']  # Update best to robust one
+        else:
+            print("No top trials for MC validation.")
+
+    def _pack_params(self, params: StrategyParams) -> np.ndarray:
+        """Helper to pack StrategyParams into array for simulation"""
+        timeframe_map = {'15m': 0, '30m': 1, '1h': 2, '4h': 3, '1d': 4}
+        supertrend_timeframe_idx = timeframe_map.get(params.supertrend_timeframe, 2)
+        return np.array([
+            params.base_percent,
+            params.initial_deviation,
+            params.trailing_deviation,
+            params.tp_level1,
+            params.tp_percent1,
+            params.fees,
+            float(params.use_supertrend_filter),
+            float(supertrend_timeframe_idx)
+        ])
+
     def optimize_fast(self, n_trials: int = 500) -> Dict:
         """Fast optimization with progress tracking"""
         # Use more aggressive pruning for speed
@@ -978,6 +1063,9 @@ class FastOptimizer:
                 pbar.update(1)
 
             study.optimize(self.objective, n_trials=n_trials, callbacks=[callback])
+
+        # Post-optimization: Run MC on top 10% candidates
+        self.post_optimize_monte_carlo(study)
 
         return self.best_params
 
