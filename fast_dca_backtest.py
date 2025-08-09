@@ -1057,9 +1057,14 @@ class FastOptimizer:
         """Fast optimization with progress tracking"""
         # Use more aggressive pruning for speed
         optuna.logging.set_verbosity(optuna.logging.WARNING)
+        import optunahub
+        mod = optunahub.load_module(package="samplers/catcma")
+        CatCmaSampler = mod.CatCmaSampler
+
+        # Create study with CatCMASampler, providing the search_space
         study = optuna.create_study(
             direction='maximize',
-            pruner=optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=5)
+            sampler=CatCmaSampler(search_space=self.optimization_config.get_search_space())  # Pass search_space here
         )
 
         # Progress bar
@@ -1226,7 +1231,10 @@ class FastOptimizer:
 
         # Run phase 1 optimization
         optuna.logging.set_verbosity(optuna.logging.WARNING)
-        study_phase1 = optuna.create_study(direction='maximize')
+        import optunahub
+        mod = optunahub.load_module(package="samplers/catcma")
+        CatCmaSampler = mod.CatCmaSampler
+        study_phase1 = optuna.create_study(direction='maximize', sampler=CatCmaSampler(search_space=trend_optimizer.optimization_config.get_search_space()))
 
         with tqdm(total=trend_trials, desc="Phase 1: Trend optimization",
                   bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
@@ -1367,7 +1375,10 @@ class FastOptimizer:
                 return -1000
 
         # Run phase 2 optimization
-        study_phase2 = optuna.create_study(direction='maximize')
+        import optunahub
+        mod = optunahub.load_module(package="samplers/catcma")
+        CatCmaSampler = mod.CatCmaSampler
+        study_phase2 = optuna.create_study(direction='maximize', sampler=CatCmaSampler(search_space=self.optimization_config.get_search_space()))
 
         with tqdm(total=dca_trials, desc="Phase 2: DCA optimization",
                   bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
@@ -1784,4 +1795,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

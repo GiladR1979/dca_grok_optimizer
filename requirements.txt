@@ -6,3 +6,5 @@ optuna>=3.0.0
 tqdm>=4.60.0
 # PyTorch - install manually if GPU acceleration needed
 # torch>=1.12.0
+torch~=2.7.1+cu118
+numba~=0.60.0

@@ -18,7 +18,7 @@ def get_coins():
 
 
 def main():
-    trials = "50000"
+    trials = "100000"
 
     coins = get_coins()
     print(f"🚀 Running optimization for {len(coins)} coins with {trials} trials each")

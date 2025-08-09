@@ -5,8 +5,9 @@ All customizable optimization variables in one place
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Union, Tuple
+from typing import Dict, List, Union, Tuple, Any
 import optuna
+from optuna.distributions import FloatDistribution, CategoricalDistribution
 
 
 @dataclass
@@ -326,35 +327,46 @@ class OptimizationConfig:
     def suggest_params(self, trial: optuna.Trial) -> StrategyParams:
         """Suggest parameters using Optuna trial with centralized ranges"""
 
+        # Helper for float params
+        def suggest_or_fixed_float(param_name: str, range_list: List[float]):
+            low = range_list[0]
+            high = range_list[-1]
+            return trial.suggest_float(param_name, low, high) if low < high else low
+
         # Suggest separate values for long and short DCA params
-        tp_level1_long = trial.suggest_categorical('tp_level1_long', self.ranges.tp_level1)
-        trailing_deviation_long = trial.suggest_categorical('trailing_deviation_long', self.ranges.trailing_deviation)
+        tp_level1_long = suggest_or_fixed_float('tp_level1_long', self.ranges.tp_level1)
+        trailing_deviation_long = suggest_or_fixed_float('trailing_deviation_long', self.ranges.trailing_deviation)
         effective_trailing_long = min(trailing_deviation_long, tp_level1_long)
 
-        tp_level1_short = trial.suggest_categorical('tp_level1_short', self.ranges.tp_level1)
-        trailing_deviation_short = trial.suggest_categorical('trailing_deviation_short', self.ranges.trailing_deviation)
+        tp_level1_short = suggest_or_fixed_float('tp_level1_short', self.ranges.tp_level1)
+        trailing_deviation_short = suggest_or_fixed_float('trailing_deviation_short', self.ranges.trailing_deviation)
         effective_trailing_short = min(trailing_deviation_short, tp_level1_short)
+
+        # Supertrend period as float, round to int
+        supertrend_period_low = self.ranges.supertrend_period[0]
+        supertrend_period_high = self.ranges.supertrend_period[-1]
+        supertrend_period = round(suggest_or_fixed_float('supertrend_period', self.ranges.supertrend_period)) if supertrend_period_low < supertrend_period_high else self.ranges.supertrend_period[0]
 
         return StrategyParams(
             # Position sizing (separate for long/short)
-            base_percent_long=trial.suggest_categorical('base_percent_long', self.ranges.base_percent),
-            base_percent_short=trial.suggest_categorical('base_percent_short', self.ranges.base_percent),
-            volume_multiplier_long=trial.suggest_categorical('volume_multiplier_long', self.ranges.volume_multiplier),
-            volume_multiplier_short=trial.suggest_categorical('volume_multiplier_short', self.ranges.volume_multiplier),
+            base_percent_long=suggest_or_fixed_float('base_percent_long', self.ranges.base_percent),
+            base_percent_short=suggest_or_fixed_float('base_percent_short', self.ranges.base_percent),
+            volume_multiplier_long=suggest_or_fixed_float('volume_multiplier_long', self.ranges.volume_multiplier),
+            volume_multiplier_short=suggest_or_fixed_float('volume_multiplier_short', self.ranges.volume_multiplier),
 
             # Entry conditions (separate for long/short)
-            initial_deviation_long=trial.suggest_categorical('initial_deviation_long', self.ranges.initial_deviation),
-            initial_deviation_short=trial.suggest_categorical('initial_deviation_short', self.ranges.initial_deviation),
-            step_multiplier_long=trial.suggest_categorical('step_multiplier_long', self.ranges.step_multiplier),
-            step_multiplier_short=trial.suggest_categorical('step_multiplier_short', self.ranges.step_multiplier),
-            max_safeties_long=trial.suggest_categorical('max_safeties_long', self.ranges.max_safeties),
-            max_safeties_short=trial.suggest_categorical('max_safeties_short', self.ranges.max_safeties),
+            initial_deviation_long=suggest_or_fixed_float('initial_deviation_long', self.ranges.initial_deviation),
+            initial_deviation_short=suggest_or_fixed_float('initial_deviation_short', self.ranges.initial_deviation),
+            step_multiplier_long=suggest_or_fixed_float('step_multiplier_long', self.ranges.step_multiplier),
+            step_multiplier_short=suggest_or_fixed_float('step_multiplier_short', self.ranges.step_multiplier),
+            max_safeties_long=trial.suggest_categorical('max_safeties_long', self.ranges.max_safeties) if len(self.ranges.max_safeties) > 1 else self.ranges.max_safeties[0],
+            max_safeties_short=trial.suggest_categorical('max_safeties_short', self.ranges.max_safeties) if len(self.ranges.max_safeties) > 1 else self.ranges.max_safeties[0],
 
             # Take profits (single TP target, separate for long/short)
             tp_level1_long=tp_level1_long,
             tp_level1_short=tp_level1_short,
-            tp_percent1_long=trial.suggest_categorical('tp_percent1_long', self.ranges.tp_percent1),
-            tp_percent1_short=trial.suggest_categorical('tp_percent1_short', self.ranges.tp_percent1),
+            tp_percent1_long=suggest_or_fixed_float('tp_percent1_long', self.ranges.tp_percent1),
+            tp_percent1_short=suggest_or_fixed_float('tp_percent1_short', self.ranges.tp_percent1),
 
             # Trailing stop (separate for long/short)
             trailing_deviation_long=effective_trailing_long,
@@ -379,16 +391,55 @@ class OptimizationConfig:
             volume_sma_period=20,
 
             # SuperTrend drawdown elimination (shared)
-            use_supertrend_filter=True,
-            supertrend_timeframe=trial.suggest_categorical('supertrend_timeframe', self.ranges.supertrend_timeframe),
-            supertrend_period=trial.suggest_categorical('supertrend_period', self.ranges.supertrend_period),
-            supertrend_multiplier=trial.suggest_categorical('supertrend_multiplier', self.ranges.supertrend_multiplier),
+            use_supertrend_filter=trial.suggest_categorical('use_supertrend_filter', self.ranges.use_supertrend_filter) if len(self.ranges.use_supertrend_filter) > 1 else self.ranges.use_supertrend_filter[0],
+            supertrend_timeframe=trial.suggest_categorical('supertrend_timeframe', self.ranges.supertrend_timeframe) if len(self.ranges.supertrend_timeframe) > 1 else self.ranges.supertrend_timeframe[0],
+            supertrend_period=supertrend_period,
+            supertrend_multiplier=suggest_or_fixed_float('supertrend_multiplier', self.ranges.supertrend_multiplier),
             require_bullish_supertrend=False,
             max_acceptable_drawdown=self.ranges.max_acceptable_drawdown,
 
             # Fixed
             fees=self.ranges.fees
         )
+
+    def get_search_space(self):
+        """Build Optuna search_space dict from ranges for CatCmaSampler, excluding fixed parameters."""
+        search_space = {}
+
+        # Helper to add float if variable
+        def add_float_if_variable(param_name: str, range_list: List[float]):
+            low = range_list[0]
+            high = range_list[-1]
+            if low < high:
+                search_space[param_name] = FloatDistribution(low, high)
+
+        # Helper to add categorical if variable
+        def add_categorical_if_variable(param_name: str, choices: List[Any]):
+            if len(choices) > 1:
+                search_space[param_name] = CategoricalDistribution(choices)
+
+        add_float_if_variable('base_percent_long', self.ranges.base_percent)
+        add_float_if_variable('base_percent_short', self.ranges.base_percent)
+        add_float_if_variable('volume_multiplier_long', self.ranges.volume_multiplier)
+        add_float_if_variable('volume_multiplier_short', self.ranges.volume_multiplier)
+        add_float_if_variable('initial_deviation_long', self.ranges.initial_deviation)
+        add_float_if_variable('initial_deviation_short', self.ranges.initial_deviation)
+        add_float_if_variable('step_multiplier_long', self.ranges.step_multiplier)
+        add_float_if_variable('step_multiplier_short', self.ranges.step_multiplier)
+        add_categorical_if_variable('max_safeties_long', self.ranges.max_safeties)
+        add_categorical_if_variable('max_safeties_short', self.ranges.max_safeties)
+        add_float_if_variable('tp_level1_long', self.ranges.tp_level1)
+        add_float_if_variable('tp_level1_short', self.ranges.tp_level1)
+        add_float_if_variable('tp_percent1_long', self.ranges.tp_percent1)
+        add_float_if_variable('tp_percent1_short', self.ranges.tp_percent1)
+        add_float_if_variable('trailing_deviation_long', self.ranges.trailing_deviation)
+        add_float_if_variable('trailing_deviation_short', self.ranges.trailing_deviation)
+        add_categorical_if_variable('use_supertrend_filter', self.ranges.use_supertrend_filter)
+        add_categorical_if_variable('supertrend_timeframe', self.ranges.supertrend_timeframe)
+        add_float_if_variable('supertrend_period', self.ranges.supertrend_period)
+        add_float_if_variable('supertrend_multiplier', self.ranges.supertrend_multiplier)
+
+        return search_space
 
     def get_custom_ranges(self, **kwargs) -> 'OptimizationConfig':
         """Create custom optimization config with overridden ranges"""
